@@ -1211,8 +1211,6 @@
 +}
 +
 +static uint32_t sweet_fb_swaps_logged;
-+static uint32_t sweet_fb_skip_logged;
-+static uint32_t sweet_fb_nocopy_logged;
 +
 +/* Copy each enabled layer's surface into the panel memory (no scaling). */
 +void
@@ -1281,19 +1279,7 @@
 +		    (uint64_t)(sx + w) * 4;
 +		if (w <= 0 || h <= 0 || s->elementWidth != 1 || s->elementHeight != 1 ||
 +		    s->memory == NULL || last > s->memory->getLength()) {
-+			if (sweet_fb_skip_logged < 16) {
-+				sweet_fb_skip_logged++;
-+				IOLog("SWEET FB: skip layer %u id %u w %d h %d ew %u eh %u mem %p "
-+				    "last %llu len %llu dx %d dy %d fw %u fh %u rb %u\n",
-+				    layer, id, w, h, s->elementWidth, s->elementHeight,
-+				    (void *)s->memory, last,
-+				    s->memory != NULL ? (unsigned long long)s->memory->getLength() : 0ULL,
-+				    dx, dy, fWidth, fHeight, fRowBytes);
-+			}
 +			src = 0;
-+		} else if (bpe != 4 && sweet_fb_nocopy_logged < 4) {
-+			sweet_fb_nocopy_logged++;
-+			IOLog("SWEET FB: no copy, bpe %u layer %u id %u\n", bpe, layer, id);
 +		}
 +		if (src != 0 && bpe == 4) {
 +			for (int32_t y = 0; y < h; y++) {

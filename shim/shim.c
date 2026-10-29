@@ -12,6 +12,9 @@
 #include "loader.h"
 #include "ufs.h"
 #include "spmi.h"
+#ifdef LOGDUMP
+#include "logdump.h"
+#endif
 
 static void dump_log(const char *tag);
 
@@ -421,6 +424,12 @@ void shim_main(uint64_t dtb)
 	struct mmu_info mi;
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
+#ifdef LOGDUMP
+	con_clear(0xff101010u);
+	logdump();
+	for (;;)
+		__asm__ volatile("wfe");
+#endif
 	stage = "loader";
 	con_clear(RED);
 	con_str("SHIM", "sweet milestone 4: xnu loader");

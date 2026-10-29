@@ -296,6 +296,15 @@ static uint32_t write_block(uint32_t lba, const void *buf)
 	return scsi(0, cdb, sizeof(cdb), (void *)buf, BLOCK, 2, &ocs, &st);
 }
 
+static int name_eq(const char *a, const char *b)
+{
+	while (*a && *a == *b) {
+		a++;
+		b++;
+	}
+	return *a == *b;
+}
+
 static int find_part(const char *want, uint32_t *first_lba, uint32_t *nblocks)
 {
 	static uint8_t ents[128 * 128] __attribute__((aligned(4096)));
@@ -325,7 +334,7 @@ static int find_part(const char *want, uint32_t *first_lba, uint32_t *nblocks)
 			name[c] = (ch >= 32 && ch < 127) ? (char)ch : '?';
 		}
 		name[c] = 0;
-		if (__builtin_strcmp(name, want))
+		if (!name_eq(name, want))
 			continue;
 		*first_lba = (uint32_t)first;
 		*nblocks = (uint32_t)(last - first + 1);
@@ -392,4 +401,31 @@ int ufs_write_log(const void *buf, unsigned len)
 			return 501;
 	}
 	return 0;
+}
+
+/* ---- public wrappers for other shim parts (log dump) ---- */
+
+int ufs_read(uint32_t lba, uint32_t count, void *buf)
+{
+	if (!host_ready())
+		return -1;
+	return (int)read_blocks(lba, count, buf);
+}
+
+int ufs_find(const char *name, uint32_t *lba, uint32_t *nblk)
+{
+	if (!host_ready())
+		return -1;
+	return find_part(name, lba, nblk);
+}
+
+/* Initialise the host once; callers that read many blocks use read_raw. */
+int ufs_init(void)
+{
+	return host_ready() ? 0 : -1;
+}
+
+int ufs_read_raw(uint32_t lba, uint32_t count, void *buf)
+{
+	return (int)read_blocks(lba, count, buf);
 }

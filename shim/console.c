@@ -97,6 +97,58 @@ static void fmt_hex(char *buf, uint64_t v, int digits)
 	buf[digits] = 0;
 }
 
+static int con_col;
+
+void con_raw(const char *s, unsigned n)
+{
+	for (unsigned i = 0; i < n; i++) {
+		char ch = s[i];
+		if (ch == '\n') {
+			row++;
+			con_col = 0;
+			continue;
+		}
+		if (ch < 0x20 || ch > 0x7e)
+			ch = '.';
+		put_char(con_col++, ch, WHITE);
+		if (con_col >= 45) {
+			con_col = 0;
+			row++;
+		}
+	}
+}
+
+
+/* Smallest text: 8x16 cells, 135 columns x 150 rows, for dense log dumps. */
+static int row1, col1;
+
+void con_raw1(const char *s, unsigned n)
+{
+	for (unsigned i = 0; i < n; i++) {
+		char ch = s[i];
+
+		if (ch == '\n') {
+			row1++;
+			col1 = 0;
+			continue;
+		}
+		if (ch < 0x20 || ch > 0x7e)
+			ch = '.';
+		if (row1 * 16 + 16 <= FB_H && col1 * 8 + 8 <= FB_W) {
+			const unsigned char *g = font8x16[ch - 0x20];
+			for (int gy = 0; gy < 16; gy++)
+				for (int gx = 0; gx < 8; gx++) {
+					uint32_t c = (g[gy] & (0x80 >> gx)) ? 0xffd0d0d0u : 0xff101010u;
+					con_fb[(row1 * 16 + gy) * (FB_STRIDE / 4) + col1 * 8 + gx] = c;
+				}
+		}
+		if (++col1 >= 135) {
+			col1 = 0;
+			row1++;
+		}
+	}
+}
+
 void con_skip(void)
 {
 	row++;

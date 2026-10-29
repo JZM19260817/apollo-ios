@@ -21,6 +21,10 @@ void con_hex(const char *label, uint64_t v);
 /* label, then "a=xxxxxxxx b=xxxxxxxx" style pairs of 32-bit values */
 void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint32_t vb);
 
+/* Raw characters at the current row, for log dumps. */
+void con_raw(const char *s, unsigned n);
+void con_raw1(const char *s, unsigned n);	/* 8x16 cells */
+
 /* Mirror of every printed line, for the persistent log dump. */
 const char *con_log(unsigned *len);
 
