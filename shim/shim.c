@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Milestone 2: one boot answers the questions that decide the XNU port.
  *   - CPU feature registers (16K granule, GIC sysreg interface)
  *   - PSCI/SMCCC version and which PSCI calls the Qualcomm TZ offers
@@ -14,6 +14,9 @@
 #include "spmi.h"
 #ifdef LOGDUMP
 #include "logdump.h"
+#endif
+#ifdef FBTEST
+#include "fbtest.h"
 #endif
 
 static void dump_log(const char *tag);
@@ -424,6 +427,10 @@ void shim_main(uint64_t dtb)
 	struct mmu_info mi;
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
+#ifdef FBTEST
+	con_clear(0xff101010u);
+	fbtest();
+#endif
 #ifdef LOGDUMP
 	con_clear(0xff101010u);
 	logdump();

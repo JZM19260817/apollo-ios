@@ -136,6 +136,21 @@ const char *loader_boot(uintptr_t dtb)
 	ba->memSizeActual = p->mem_size;
 	con_hex2("BOOTARG", "pa=", ba_pa, "top=", top);
 
+	/*
+	 * XNU has no USB, so a test boot could only be ended by hand. Arm the
+	 * APSS watchdog and mark the next boot as "bootloader": nothing in XNU
+	 * pets that block, so the phone resets into fastboot on its own and the
+	 * log can be pulled over recovery adb without touching the device.
+	 */
+	*(volatile uint32_t *)0x146bf65cUL = 0x77665500U;	/* restart_reason */
+	__asm__ volatile("dsb sy" ::: "memory");
+	/* qcom watchdog: ticks at 32765 Hz, EN at 0x08, bark 0x10, bite 0x14 */
+	*(volatile uint32_t *)(0x17c10000UL + 0x10) = 360 * 32765;
+	*(volatile uint32_t *)(0x17c10000UL + 0x14) = 366 * 32765;
+	*(volatile uint32_t *)(0x17c10000UL + 0x08) |= 1;
+	__asm__ volatile("dsb sy" ::: "memory");
+	con_str("AUTO", "watchdog armed, reset to fastboot in 6 min");
+
 	uintptr_t entry_pa = p->entry_va + pa_of_va_base;
 	con_hex("JUMP", entry_pa);
 	con_str("XNU", "jumping (fbcon clears screen)");
