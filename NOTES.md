@@ -1,6 +1,78 @@
 > **This checkout is the apollo port** (Redmi K30S Ultra, SM8250). Read the section
 > below first; everything after it is the upstream sweet log, kept for reference.
 
+## apollo status (2026-10-30) — read this first
+
+**Bottom line: iOS boots to its own boot screen and the display works; the
+system does not hand over to SpringBoard's UI.**
+
+| Stage | State | Evidence |
+| --- | --- | --- |
+| Kernel | works, no panic | boot log, 20+ min runtime |
+| HFS+ root in `userdata` | mounted, writable | `BSD root: ufsroot0`, log written |
+| launchd | runs every boot task, `Early boot complete` | console log |
+| backboardd / SpringBoard | both exec once, no crashes, swapping 1125x2436 frames | `SWEET FB` lines |
+| Display | **verified working** | fbtest shim paints 0x9c000000 and its text is visible |
+| Screen content | iOS boot logo + progress bar, never replaced | user observation + 0091 shots |
+
+The earlier "panel is not receiving frames" hypothesis was **wrong**. 0090
+instrumentation showed `72600 presents, 72599 copied, 0 skipped`: the copy to
+panel memory always happens. A shim build (`shim/fbtest.c`) then painted
+0x9c000000 red/green/blue and the screen showed the console text drawn into
+that same buffer, proving the panel scans it.
+
+So the remaining problem is a user-space handover: the boot UI stays on
+screen, SpringBoard runs but its scene never becomes the visible one.
+
+**Open questions for the next session**
+
+1. What exactly is on the panel? `xnu/patches/0091-sweet-fb-shot.patch` logs a
+   32x16 RGB grid about 5 s and 50 s after the first present;
+   `work/tools/render-fb-shot.py` renders it.
+2. Is the boot UI drawn by launchd's progress plugin (so boot never finishes)
+   or is it SpringBoard showing a "boot progress" scene?
+3. SpringBoard's main thread sits in `0x2013c1030` (libsystem park) with a
+   backtrace through libdispatch — needs symbolication against the dyld shared
+   cache to say what it waits on.
+
+**Tooling that makes iteration cheap (all committed)**
+
+| Tool | Purpose |
+| --- | --- |
+| `work/tools/make-recovery-noauth.py` | builds `recovery-noauth.img` (sets `ro.adb.secure=0`); recovery adb then needs no approval |
+| `work/tools/pull-xnu-log-wsl.sh` | pulls the whole `SWEETLOG` ring over recovery adb into `work/logs/xnu-console.txt` |
+| `work/tools/pull-xnu-log.py` | same via Windows adb |
+| `work/tools/analyze-xnu-smp.py` | per-process thread park summary |
+| `work/tools/analyze-xnu-crashes.py` | `CRASH` lines (only CommCenter crashes, expected without a modem) |
+| `work/tools/render-fb-shot.py` | 0090/0091 log lines back into a PNG |
+| `work/tools/deploy-kernel.py` | newest kernel artifact -> pack -> boot |
+| `shim/logdump9.c` | reads the ring and prints it at 8x16 when there is no adb |
+| `shim/fbtest.c` | colour-band framebuffer probe |
+
+**Loop that works right now**
+
+```powershell
+# phone in fastboot
+wsl -d Ubuntu-24.04 -u root -- bash -c "cd /mnt/d/redmi_ios/work/boot && fastboot boot shim-kernel.img"
+# ... let XNU run ...
+# phone back in fastboot (power cycle: the watchdog arming is still broken)
+wsl -d Ubuntu-24.04 -u root -- bash -c "cd /mnt/d/redmi_ios/work/boot && fastboot boot recovery-noauth.img"
+wsl -d Ubuntu-24.04 -u root -- bash -c "bash /mnt/d/redmi_ios/work/tools/pull-xnu-log-wsl.sh"
+```
+
+**Known broken / TODO**
+
+- `shim/loader.c` watchdog arming never fires: register offsets were wrong
+  (qcom WDT uses EN `0x08`, bark `0x10`, bite `0x14`, ticks at 32765 Hz).
+  Fixed in the source but **not rebuilt or tested yet**.
+- USB is absent in XNU: patches 0072-0076 (sweet USB) were skipped in the
+  build (`bsd/dev/sweet_usb.c: No such file or directory`). Getting USB up
+  would allow live debugging and is probably the fastest route to the
+  handover question.
+- Patches 0090/0091 must be generated on top of the fully patched tree
+  (`/root/bt` for 0090, `/root/bt2` for 0091); editing an early patch breaks
+  the context of later ones (this cost two failed CI runs).
+
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
