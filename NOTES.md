@@ -151,6 +151,70 @@ point.
 3. Worth doing afterwards: rate-limit `SWEET KEYS: read error` in
    `bsd/dev/sweet_keys.c` (it logs on every poll) and disable VirtualAudio.
 
+## apollo status (2026-10-31 02:00) — the CoreAnimation wall
+
+**Where we are: migration skipped, Setup Assistant path reached, display works,
+but backboardd never presents a frame because CoreAnimation has no renderer.**
+
+Sequence that got here:
+
+1. `tools/set-migration-done.py` put `LastSystemVersion = 20H392` into the root
+   image, the image was flashed, and the one-hour migration no longer runs.
+   `budd` (Setup Assistant) starts; the system is on the Setup path.
+2. The missing `/product` node was found and fixed. `mkadt.py` copies it from
+   the real iPhone X tree at `research/ipsw-x/d22ap.adt`, which never existed
+   here, so the node was silently skipped. Extracted it from the IPSW:
+
+   ```bash
+   unzip -o -j <ipsw> 'Firmware/all_flash/DeviceTree.d22ap.im4p'
+   apt-get install -y lzfse                      # adt.py unwrap needs it
+   python3 tools/adt.py unwrap DeviceTree.d22ap.im4p research/ipsw-x/d22ap.adt
+   python3 tools/mkadt.py apollo.adt --highmem   # now 12772 bytes, was 10088
+   ```
+
+   Log before: `IOK backboardd: path IODeviceTree:/product -> none`
+   Log after:  `IOK backboardd: path IODeviceTree:/product -> IOPlatformDevice`
+   (`/buttons` likewise). `research/` is gitignored, so the Apple tree stays
+   out of the repo.
+
+3. **The wall that remains:** after creating its 1125x2436 surface,
+   backboardd polls `IOAcceleratorES` and `IOAcceleratorESLegacy` and finds
+   nothing, so it never swaps. `present()` is never called (0 heartbeat lines,
+   3 swaps in 13 minutes) and the panel keeps the boot splash.
+
+Why this is a different failure from the migration boot: backboardd drew the
+migration progress UI **itself, on the CPU**, which is why that boot showed
+72600 presents. The Setup/SpringBoard UI goes through CoreAnimation, which
+wants a GPU service we do not provide.
+
+Upstream's own notes (L156 in their NOTES.md) record the same wall and only a
+hypothesis for it: QuartzCore contains a software rasteriser `CA::OGL::SW` plus
+`VirtualServer`/`VirtualDisplay`/`MemorySurface`, and the env knobs
+`CA_ENABLE_OGL`, `CA_DISPLAY_TYPE`, `CA_FORCE_LOCAL_SERVER`. They reached the
+Setup "Hello" screen on image v12 with kernel 0057 without any GPU patch, so
+something in that combination let CA fall back to its software path; we have
+not found what yet.
+
+**Next ideas, cheapest first**
+
+1. Give backboardd `CA_ENABLE_OGL=0` (or `CA_FORCE_LOCAL_SERVER=1`) through its
+   launchd plist in the root image and see whether CA takes the SW path. No
+   kernel change, one image reflash.
+2. Compare our IOMFB selector traffic with the migration boot: what does
+   backboardd call in the seconds *before* the first swap there? We no longer
+   have that log, but a boot with the migration re-enabled would produce it.
+3. Provide an `IOAcceleratorES` stub service so the poll succeeds; CA would then
+   try Metal on it, which may fail differently.
+
+**State of the device**
+
+- `userdata` holds the migration-skipped image; the kernel boot image used last
+  is `work/boot/shim-kernel4.img` (kernel 0092 + ADT with `/product`, 8 CPUs).
+- Recovery with root adb without approval:
+  `work/boot/recovery-noauth.img` (`tools/make-recovery-noauth.py`).
+- Pull a log with `tools/pull-xnu-log-wsl.sh` after `fastboot boot` of that
+  recovery; render 0091/0092 screenshots with `tools/render-fb-shot.py`.
+- Remember `git config core.autocrlf false` here: a CRLF patch breaks CI.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
