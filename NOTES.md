@@ -73,6 +73,84 @@ wsl -d Ubuntu-24.04 -u root -- bash -c "bash /mnt/d/redmi_ios/work/tools/pull-xn
   (`/root/bt` for 0090, `/root/bt2` for 0091); editing an early patch breaks
   the context of later ones (this cost two failed CI runs).
 
+## apollo status (2026-10-30, evening) — the migration is the last wall
+
+**The display works, the kernel works, 229 daemons start; what blocks the GUI
+is iOS's one-hour data migration, and it repeats on every boot.**
+
+Evidence gathered today:
+
+- `xnu/patches/0090` counters: `72600 presents, 72599 copied, 0 skipped` —
+  the kernel copies every compositor frame into panel memory.
+- `shim/fbtest.c` painted 0x9c000000 red/green/blue and its console text was
+  visible on the panel: **the panel scans that buffer**, so the display path is
+  correct end to end.
+- `xnu/patches/0091` logs a 32x16 RGB grid. At 5 s and 50 s the panel shows a
+  **black screen with one white bar in the middle** (both shots bit-identical):
+  that is the iOS data-migration progress UI, not a stuck logo.
+- The log lists 229 distinct executables (SpringBoard, backboardd,
+  runningboardd, notifyd, configd, powerd, lsd, chronod, securityd, akd, ...).
+  Only CommCenter, fairplayd.H2 and bluetoothd crash-loop; SpringBoard and
+  backboardd stay up.
+- `securityd` asks for AKS selector 10 (`aks_wrap_key`) 165 times and gets
+  `kIOReturnUnsupported`. Upstream has the same stub, so this is expected.
+
+### Why the migration repeats (found in upstream NOTES.md)
+
+Upstream hit exactly this and documented the cause: DataMigration compares
+`LastSystemVersion` in
+`/var/mobile/Library/Preferences/com.apple.migration.plist` against the build
+version. Without a recorded version every boot looks like a fresh install.
+On iOS `kCFPreferencesCurrentHost` lands in that plain plist, so the fix is a
+single key.
+
+**Applied offline:** `work/tools/set-migration-done.py` wrote
+`LastSystemVersion = 20H392` (plus `DMUserDataDisposition = 4`) into
+`work/rootimg/ios16-root.img`, owner 501:501 mode 0600; `fsck.hfsplus` says the
+volume is OK afterwards. **The phone still runs the old image** — the modified
+one has to be flashed:
+
+```powershell
+adb reboot bootloader          # or power cycle into fastboot
+wsl -d Ubuntu-24.04 -u root -- bash -c "cd /mnt/d/redmi_ios/work/rootimg && fastboot flash userdata ios16-root.img"
+```
+
+About 25 minutes; it wipes the current (in-progress) migration, which is the
+point.
+
+### Speed facts worth keeping
+
+- `cpus=1` (upstream's slow case) makes the migration take ~1 hour; today's
+  8-CPU boot got the bar to ~99% in ~45 minutes but it crawls at the end.
+- The present path memcpys a full 11 MB frame per flush; `sweetfb_hz=30` means
+  ~330 MB/s of memory bandwidth. A `sweetfb_hz=5` variant is prebuilt at
+  `work/boot/shim-kernel-fast.img` (8 CPUs, 5 Hz) to try if a boot needs to
+  reach the GUI faster.
+- Upstream also moved `/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin` away to
+  stop a `mediaserverd` SIGSEGV loop. Not done here yet.
+
+### Tools added today
+
+| Tool | Purpose |
+| --- | --- |
+| `work/tools/fetch-artifact.py` | download a run's kernel artifact with curl (Python TLS stalls on big downloads) |
+| `work/tools/gh_log_curl.py` | fetch a job log with curl |
+| `work/tools/render-fb-shot.py` | render 0091 screenshots to PNG |
+| `work/tools/analyze-exec.py` | exec/AKS summary (229 daemons, selector failures) |
+| `work/tools/set-migration-done.py` | write `LastSystemVersion` into the root image |
+| `shim/fbtest.c` | framebuffer colour-band probe |
+
+### Next
+
+1. Flash the modified root image, boot with 8 CPUs, and expect the Setup
+   assistant ("Hello") instead of the migration bar — upstream reached that
+   screen this way.
+2. If the migration still runs, add the ByHost variant and check
+   `/chosen/unique-chip-id` (our mkadt already emits `unique-chip-id` and
+   `chip-id`; our ECID is `0x41504F4C4C4F0001`).
+3. Worth doing afterwards: rate-limit `SWEET KEYS: read error` in
+   `bsd/dev/sweet_keys.c` (it logs on every poll) and disable VirtualAudio.
+
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
