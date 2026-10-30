@@ -1,6 +1,6 @@
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -311,6 +311,54 @@
+@@ -311,6 +311,57 @@
  	}
  }
  
@@ -8,6 +8,9 @@
 + * Coarse screenshot into the persistent console log: a 32x16 grid of RGB
 + * samples. Seeing the panel from the log is the only way to tell a missing
 + * handover from a broken scanout when the device has no USB.
++ *
++ * Takes the framebuffer explicitly: it is a free function, so it cannot touch
++ * AppleCLCD members.
 + */
 +static void
 +sweet_fb_hex2(char *p, uint32_t v)
@@ -19,12 +22,12 @@
 +}
 +
 +static void
-+sweet_fb_shot(uint32_t index)
++sweet_fb_shot(volatile uint32_t *fb, uint32_t width, uint32_t height,
++    uint32_t rowBytes, uint32_t index)
 +{
-+	volatile uint32_t *fb = (volatile uint32_t *)fPixels;
 +	char line[16 + 2 + 32 * 7 + 4];
 +
-+	if (fPixels == 0 || fRowBytes == 0)
++	if (fb == NULL || width == 0 || height == 0 || rowBytes == 0)
 +		return;
 +	for (uint32_t gy = 0; gy < 16; gy++) {
 +		char *p = line;
@@ -35,9 +38,9 @@
 +		*p++ = "0123456789abcdef"[(index >> 4) & 0xf];
 +		*p++ = "0123456789abcdef"[index & 0xf];
 +		for (uint32_t gx = 0; gx < 32; gx++) {
-+			uint32_t x = (gx * fWidth) / 32 + fWidth / 64;
-+			uint32_t y = (gy * fHeight) / 16 + fHeight / 32;
-+			uint32_t px = fb[(uint64_t)y * (fRowBytes / 4) + x];
++			uint32_t x = (gx * width) / 32 + width / 64;
++			uint32_t y = (gy * height) / 16 + height / 32;
++			uint32_t px = fb[(uint64_t)y * (rowBytes / 4) + x];
 +
 +			*p++ = ' ';
 +			sweet_fb_hex2(p, (px >> 16) & 0xff);
@@ -55,12 +58,13 @@
  void
  AppleCLCD::present(const uint8_t *rec)
  {
-@@ -332,6 +380,9 @@
+@@ -332,6 +383,10 @@
  		}
  	}
  
 +	if (sweet_fb_present_count == 300 || sweet_fb_present_count == 3000)
-+		sweet_fb_shot(sweet_fb_present_count == 300 ? 0 : 1);
++		sweet_fb_shot((volatile uint32_t *)fPixels, fWidth, fHeight, fRowBytes,
++		    sweet_fb_present_count == 300 ? 0 : 1);
 +
  	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
  		uint32_t id = get32(rec, 0x54 + 4 * layer);
