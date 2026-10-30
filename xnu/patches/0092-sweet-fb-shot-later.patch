@@ -1,0 +1,20 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -383,9 +383,14 @@
+ 		}
+ 	}
+ 
+-	if (sweet_fb_present_count == 300 || sweet_fb_present_count == 3000)
+-		sweet_fb_shot((volatile uint32_t *)fPixels, fWidth, fHeight, fRowBytes,
+-		    sweet_fb_present_count == 300 ? 0 : 1);
++	if (sweet_fb_present_count == 300 || sweet_fb_present_count == 3000 ||
++	    sweet_fb_present_count == 18000 || sweet_fb_present_count == 36000) {
++		uint32_t which = sweet_fb_present_count == 300 ? 0 :
++		    sweet_fb_present_count == 3000 ? 1 :
++		    sweet_fb_present_count == 18000 ? 2 : 3;
++
++		sweet_fb_shot((volatile uint32_t *)fPixels, fWidth, fHeight, fRowBytes, which);
++	}
+ 
+ 	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
+ 		uint32_t id = get32(rec, 0x54 + 4 * layer);
