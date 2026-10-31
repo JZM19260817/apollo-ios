@@ -1,0 +1,117 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -22,11 +22,17 @@
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
+ void sweet_touch_init(void);
+ 
+-#define TOUCH_SE_PA      0x00a84000u
++#define TOUCH_SE_PA      0x00990000u	/* apollo: QUPv3 SE4 (sweet had SE7 at 0xa84000) */
+ #define TOUCH_GCC_PA     0x00100000u
+ #define TOUCH_NORTH_PA   0x03900000u /* DT TLMM + NORTH (0x500000) */
+-#define TOUCH_GCC_VOTE   0x5200cu
+-#define TOUCH_RCG       0x18148u    /* wrapper1 LOCAL S1 = global SE7 */
++#define TOUCH_GCC_VOTE   0x52008u	/* SM8250 vote register (sweet used 0x5200c) */
++/*
++ * SM8250: gcc_qupv3_wrap0_s4_clk_src cmd_rcgr. The branches are
++ * vote-gated in TOUCH_GCC_VOTE, so the halt registers are listed here.
++ */
++#define TOUCH_RCG       0x174d0u
++#define TOUCH_VOTE_SE4   (1u << 14)
++#define TOUCH_VOTE_AHB   ((1u << 6) | (1u << 7) | (1u << 8))
+ #define TOUCH_GPIO_CFG(n) ((uint32_t)(n) * 0x1000u)
+ #define TOUCH_GPIO_IO(n)  (TOUCH_GPIO_CFG(n) + 4u)
+ #define TOUCH_MAX        10u
+@@ -136,72 +142,32 @@
+ static bool
+ touch_clocks(void)
+ {
+-	/* Vote on only wrapper1 and SE7, preserving other clock users. */
+-	uint32_t mask = (0x0fu << 18) | (1u << 23);
+-	touch_wr(st.gcc, TOUCH_GCC_VOTE, touch_rd(st.gcc, TOUCH_GCC_VOTE) | mask);
+-	uint32_t dfs = touch_rd(st.gcc, TOUCH_RCG + 0x14u);
++	/*
++	 * apollo / SM8250: QUPv3 SE4 runs from XO/1 (19.2 MHz) and every branch is
++	 * gated by a bit in the GCC vote register rather than by its own CBCR, so
++	 * enabling is a single write plus a halt check on each branch.
++	 */
++	const uint32_t halts[] = {0x17004u, 0x17008u, 0x23000u, 0x174ccu};
+ 	uint32_t cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
+-	printf("SWEET TOUCH: gcc vote=%#x rcg=%#x cfg=%#x dfs=%#x\n",
+-	    touch_rd(st.gcc, TOUCH_GCC_VOTE), touch_rd(st.gcc, TOUCH_RCG), cfg, dfs);
+-	if (dfs & 1u) {
+-		/*
+-		 * SE CLK_SEL=0 selects DFS performance level 0. On apollo the level
+-		 * is programmed to some other rate (0x2601), which would leave the
+-		 * controller without the 19.2 MHz it expects. Rewrite level 0 to
+-		 * XO/div 1 and trigger the table update; if the hardware still
+-		 * reports a different level, drop DFS and program the plain root
+-		 * divider instead.
+-		 */
+-		uint32_t lvl = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
+-		if ((lvl & 0x371fu) != 1u) {
+-			uint32_t want = (lvl & ~(0x371fu | (1u << 20))) | 1u;
+-			touch_wr(st.gcc, TOUCH_RCG + 0x1cu, want);
+-			touch_wr(st.gcc, TOUCH_RCG + 0x18u, 1u);	/* DFS update */
+-			(void)touch_wait_clear(st.gcc, TOUCH_RCG + 0x18u, 1u);
+-			lvl = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
+-			printf("SWEET TOUCH: DFS level0 %#x -> %#x\n",
+-			    (lvl & 0x371fu) == 1u ? want : 0u, lvl);
+-		}
+-		if ((lvl & 0x371fu) != 1u) {
+-			printf("SWEET TOUCH: leaving DFS for a plain XO root\n");
+-			touch_wr(st.gcc, TOUCH_RCG + 0x14u, dfs & ~1u);
+-			cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
+-			cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
+-			touch_wr(st.gcc, TOUCH_RCG + 4u, cfg);
+-			touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
+-			if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
+-				printf("SWEET TOUCH: RCG update timeout (dfs off)\n");
+-				return false;
+-			}
+-		}
+-	} else {
+-		/* XO parent 0, HID divider 1 => 19.2 MHz. No PLL or voltage change. */
+-		cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
+-		touch_wr(st.gcc, TOUCH_RCG + 4u, cfg);
+-		touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
+-		if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
+-			printf("SWEET TOUCH: RCG update timeout\n");
+-			return false;
+-		}
++
++	cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
++	touch_wr(st.gcc, TOUCH_RCG + 4u, cfg);
++	touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
++	if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
++		printf("SWEET TOUCH: RCG update timeout\n");
++		return false;
+ 	}
+-	const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
+-	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
+-		/*
+-		 * On sweet the bootloader leaves these branch clocks running, so the
+-		 * driver only waits for them. apollo has them off (0x80000002 =
+-		 * halted + hardware controlled): drop HW_CTL, set CLK_ENABLE, then
+-		 * wait for the halted bit to clear.
+-		 */
+-		uint32_t br = touch_rd(st.gcc, branches[i]);
+-		if ((br & 1u) == 0 || (br & (1u << 1))) {
+-			touch_wr(st.gcc, branches[i], (br & ~(1u << 1)) | 1u);
+-		}
+-		if (!touch_wait_clear(st.gcc, branches[i], 1u << 31)) {
+-			printf("SWEET TOUCH: GCC branch %#x halted (%#x)\n", branches[i],
+-			    touch_rd(st.gcc, branches[i]));
++	touch_wr(st.gcc, TOUCH_GCC_VOTE,
++	    touch_rd(st.gcc, TOUCH_GCC_VOTE) | TOUCH_VOTE_SE4 | TOUCH_VOTE_AHB);
++	for (unsigned i = 0; i < sizeof(halts) / sizeof(halts[0]); ++i) {
++		if (!touch_wait_clear(st.gcc, halts[i], 1u << 31)) {
++			printf("SWEET TOUCH: branch %#x still halted (%#x)\n", halts[i],
++			    touch_rd(st.gcc, halts[i]));
+ 			return false;
+ 		}
+ 	}
++	printf("SWEET TOUCH: SE4 clocks up, vote=%#x rcg=%#x\n",
++	    touch_rd(st.gcc, TOUCH_GCC_VOTE), touch_rd(st.gcc, TOUCH_RCG + 4u));
+ 	return true;
+ }
+ 
