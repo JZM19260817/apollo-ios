@@ -1,0 +1,31 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -147,6 +147,11 @@
+ 	 * gated by a bit in the GCC vote register rather than by its own CBCR, so
+ 	 * enabling is a single write plus a halt check on each branch.
+ 	 */
++	/*
++	 * 0x17004/0x17008 are the wrapper AHB branches: hardware-controlled, so
++	 * their halt bit stays set even though the SE registers are accessible.
++	 * Only the SE4 clock branch (last entry) must really be un-halted.
++	 */
+ 	const uint32_t halts[] = {0x17004u, 0x17008u, 0x23000u, 0x174ccu};
+ 	uint32_t cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
+ 
+@@ -160,10 +165,14 @@
+ 	touch_wr(st.gcc, TOUCH_GCC_VOTE,
+ 	    touch_rd(st.gcc, TOUCH_GCC_VOTE) | TOUCH_VOTE_SE4 | TOUCH_VOTE_AHB);
+ 	for (unsigned i = 0; i < sizeof(halts) / sizeof(halts[0]); ++i) {
++		bool critical = halts[i] == 0x174ccu;
++
+ 		if (!touch_wait_clear(st.gcc, halts[i], 1u << 31)) {
+-			printf("SWEET TOUCH: branch %#x still halted (%#x)\n", halts[i],
++			printf("SWEET TOUCH: branch %#x %s (%#x)\n", halts[i],
++			    critical ? "still halted" : "halted, not critical",
+ 			    touch_rd(st.gcc, halts[i]));
+-			return false;
++			if (critical)
++				return false;
+ 		}
+ 	}
+ 	printf("SWEET TOUCH: SE4 clocks up, vote=%#x rcg=%#x\n",
