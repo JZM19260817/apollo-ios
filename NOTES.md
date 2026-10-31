@@ -283,6 +283,49 @@ better artifact.
 4. Only then look at performance: `sweetfb_hz=5` image is prebuilt at
    `work/boot/shim-kernel-fast.img` if the CPU copy needs to be cheaper.
 
+## Touch status (2026-10-31 ~10:00) — blocked at the SPI clock, first fix built
+
+The GUI reaches the Hello screen but the panel does not respond to touch.
+The kernel log says why, in the touch driver's own words:
+
+```
+SWEET HID: touch registered
+SWEET TOUCH: starting in 45 s
+SWEET TOUCH: mapping GCC/TLMM/SE7
+SWEET TOUCH: gcc vote=0xbc0000 rcg=0 cfg=0 dfs=0x1
+SWEET TOUCH: DFS level0=0x2601 is not XO/1; need clock integration
+```
+
+`touch_clocks()` in `bsd/dev/sweet_touch.c` requires the GENI SE clock to come
+from a 19.2 MHz XO root. apollo's SE7 runs from DFS performance level 0, and
+that level is programmed to 0x2601, so the function returns false and no SPI
+traffic ever happens. This is **not** the same as the earlier bare-metal probe
+(where the chip did not answer); here the driver never got that far.
+
+**Patch 0093** (`xnu/patches/0093-sweet-touch-dfs-clock.patch`) rewrites DFS
+level 0 to XO/div 1 and triggers the DFS update; if the hardware still reports
+another level it leaves DFS and programs the plain root divider to the same
+rate. It applies cleanly after the series and the kernel built as CI run
+`41155575461`, verified by the string `leaving DFS for a plain XO root`.
+
+**What the next log will tell us**
+
+1. `SWEET TOUCH: DFS level0 ... -> ...` — did the clock change take effect, and
+   did it fall into the "leaving DFS" path?
+2. `SWEET TOUCH: L11C RPMh enable failed N; probes skipped` — touch needs
+   LDO11C at 3.2 V through RPMh (`bsd/dev/sweet_rpmh.c`, which looks the
+   resource up by name in the RSC command DB, so it is not a hardcoded
+   address). If this fails, the chip stays unpowered and no clock fix helps.
+3. `SWEET TOUCH: selected <name>, 1080x2400, ...` — the probe sequence reads a
+   Goodix PID at 0x4022 and then the Novatek IDs; a selection line means the
+   chip answered.
+
+**Reminder: every kernel test needs one physical power cycle**, because XNU has
+no USB and the shim's watchdog arming breaks the boot (it reset into Android
+instead of starting XNU). Do not re-add it without care.
+
+Boot image used for this test: `work/boot/shim-touch.img` (kernel 0093 build +
+ADT with `/product`, 8 CPUs).
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
