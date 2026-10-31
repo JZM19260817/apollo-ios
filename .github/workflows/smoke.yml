@@ -1,0 +1,14 @@
+name: smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: say hello
+        run: |
+          echo "smoke test: $(date -u)"
+          uname -a
