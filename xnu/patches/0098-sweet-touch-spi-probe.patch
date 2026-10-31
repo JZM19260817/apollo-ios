@@ -21,10 +21,10 @@
 +se_spi_done(unsigned us)
 +{
 +	for (unsigned i = 0; i < us; i++) {
-+		uint32_t st = touch_rd(st.se, 0x610u);
++		uint32_t status = touch_rd(st.se, 0x610u);
 +
-+		if (st & SE_CMD_DONE) {
-+			touch_wr(st.se, 0x618u, st);
++		if (status & SE_CMD_DONE) {
++			touch_wr(st.se, 0x618u, status);
 +			return 0;
 +		}
 +		delay(1);
