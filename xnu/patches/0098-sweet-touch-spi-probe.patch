@@ -93,7 +93,7 @@
  static bool
  touch_se_init(void)
  {
-@@ -514,11 +600,23 @@
+@@ -514,11 +600,32 @@
  
  		printf("SWEET TOUCH: power probe ldoc11 -> %d\n", power_probe);
  	}
@@ -110,7 +110,16 @@
 +		 * Novatek registers; the rails were voted on just above.
 +		 */
 +		uint8_t id[8] = {0};
++		unsigned pin;
 +
++		/*
++		 * The generic pin setup above is sweet's (6/7/8/9, I2C plus reset on
++		 * 8). apollo drives the panel over SPI on 8..11, so re-mux those four
++		 * to qup4 first: index 1 in the pin's own funcs list.
++		 */
++		for (pin = 8; pin <= 11; pin++) {
++			touch_gpio(pin, 1, 0, 6, false, false);
++		}
 +		se_spi_setup();
 +		se_spi_read(0x3f000u, id, sizeof(id));
 +		printf("SWEET TOUCH: SPI 3F000 %02x %02x %02x %02x %02x %02x %02x %02x\n",
