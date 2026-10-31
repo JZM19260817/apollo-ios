@@ -5,7 +5,7 @@
  }
  
 +/* ---- apollo GENI SPI transport (SE4) ---------------------------------- */
-+#define SE4_BASE	0x00990000u
++/* SE4 is already mapped in st.se by 0095 (TOUCH_SE_PA = 0x990000). */
 +#define SE_SPI_TX_RX_OP	7u
 +#define SE_SPI_CS_ON	8u
 +#define SE_SPI_CS_OFF	9u
@@ -21,10 +21,10 @@
 +se_spi_done(unsigned us)
 +{
 +	for (unsigned i = 0; i < us; i++) {
-+		uint32_t st = touch_rd(SE4_BASE, 0x610u);
++		uint32_t st = touch_rd(st.se, 0x610u);
 +
 +		if (st & SE_CMD_DONE) {
-+			touch_wr(SE4_BASE, 0x618u, st);
++			touch_wr(st.se, 0x618u, st);
 +			return 0;
 +		}
 +		delay(1);
@@ -35,42 +35,42 @@
 +static void
 +se_spi_cs(int on)
 +{
-+	touch_wr(SE4_BASE, 0x600u, (on ? SE_SPI_CS_ON : SE_SPI_CS_OFF) << 27);
++	touch_wr(st.se, 0x600u, (on ? SE_SPI_CS_ON : SE_SPI_CS_OFF) << 27);
 +	(void)se_spi_done(2000);
 +}
 +
 +static uint8_t
 +se_spi_xfer(uint8_t out)
 +{
-+	touch_wr(SE4_BASE, 0x26cu, 1u);
-+	touch_wr(SE4_BASE, 0x270u, 1u);
-+	touch_wr(SE4_BASE, 0x600u, SE_SPI_TX_RX_OP << 27);
-+	touch_wr(SE4_BASE, 0x700u, out);
++	touch_wr(st.se, 0x26cu, 1u);
++	touch_wr(st.se, 0x270u, 1u);
++	touch_wr(st.se, 0x600u, SE_SPI_TX_RX_OP << 27);
++	touch_wr(st.se, 0x700u, out);
 +	if (se_spi_done(2000)) {
 +		return 0xff;
 +	}
-+	return (uint8_t)(touch_rd(SE4_BASE, 0x780u) & 0xffu);
++	return (uint8_t)(touch_rd(st.se, 0x780u) & 0xffu);
 +}
 +
 +static void
 +se_spi_setup(void)
 +{
 +	/* XO to the SE, 9.6 MHz SPI, 8-bit MSB-first words, manual CS. */
-+	touch_wr(SE4_BASE, 0x20u, 1u);
-+	touch_wr(SE4_BASE, 0x24u, 0x7fu);
-+	touch_wr(SE4_BASE, 0xe18u, 0);
-+	touch_wr(SE4_BASE, 0xe1cu, 0);
-+	touch_wr(SE4_BASE, 0x258u, touch_rd(SE4_BASE, 0x258u) & ~1u);
-+	touch_wr(SE4_BASE, 0x810u, 8u);
-+	touch_wr(SE4_BASE, 0x814u, 9u);
-+	touch_wr(SE4_BASE, 0x260u, 0xffu);
-+	touch_wr(SE4_BASE, 0x284u, 0xffu);
-+	touch_wr(SE4_BASE, 0x268u, 4u);
-+	touch_wr(SE4_BASE, 0x25cu, touch_rd(SE4_BASE, 0x25cu) & ~(1u << 1));
-+	touch_wr(SE4_BASE, 0x224u, 0u);
-+	touch_wr(SE4_BASE, 0x230u, 0u);
-+	touch_wr(SE4_BASE, 0x7cu, 0u);
-+	touch_wr(SE4_BASE, 0x48u, (2u << 4) | 1u);
++	touch_wr(st.se, 0x20u, 1u);
++	touch_wr(st.se, 0x24u, 0x7fu);
++	touch_wr(st.se, 0xe18u, 0);
++	touch_wr(st.se, 0xe1cu, 0);
++	touch_wr(st.se, 0x258u, touch_rd(st.se, 0x258u) & ~1u);
++	touch_wr(st.se, 0x810u, 8u);
++	touch_wr(st.se, 0x814u, 9u);
++	touch_wr(st.se, 0x260u, 0xffu);
++	touch_wr(st.se, 0x284u, 0xffu);
++	touch_wr(st.se, 0x268u, 4u);
++	touch_wr(st.se, 0x25cu, touch_rd(st.se, 0x25cu) & ~(1u << 1));
++	touch_wr(st.se, 0x224u, 0u);
++	touch_wr(st.se, 0x230u, 0u);
++	touch_wr(st.se, 0x7cu, 0u);
++	touch_wr(st.se, 0x48u, (2u << 4) | 1u);
 +	se_spi_wait(500);
 +}
 +
