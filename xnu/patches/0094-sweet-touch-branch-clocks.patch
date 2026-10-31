@@ -1,0 +1,19 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -186,6 +186,16 @@
+ 	}
+ 	const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
+ 	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
++		/*
++		 * On sweet the bootloader leaves these branch clocks running, so the
++		 * driver only waits for them. apollo has them off (0x80000002 =
++		 * halted + hardware controlled): drop HW_CTL, set CLK_ENABLE, then
++		 * wait for the halted bit to clear.
++		 */
++		uint32_t br = touch_rd(st.gcc, branches[i]);
++		if ((br & 1u) == 0 || (br & (1u << 1))) {
++			touch_wr(st.gcc, branches[i], (br & ~(1u << 1)) | 1u);
++		}
+ 		if (!touch_wait_clear(st.gcc, branches[i], 1u << 31)) {
+ 			printf("SWEET TOUCH: GCC branch %#x halted (%#x)\n", branches[i],
+ 			    touch_rd(st.gcc, branches[i]));
