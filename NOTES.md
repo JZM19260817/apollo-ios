@@ -215,6 +215,74 @@ not found what yet.
 - Pull a log with `tools/pull-xnu-log-wsl.sh` after `fastboot boot` of that
   recovery; render 0091/0092 screenshots with `tools/render-fb-shot.py`.
 - Remember `git config core.autocrlf false` here: a CRLF patch breaks CI.
+## 🎉 MILESTONE (2026-10-31 09:24) — iOS Hello screen on the Redmi K30S Ultra
+
+The Setup Assistant "Hello" screen renders on the phone. Confirmed by the user
+and by the log: `SWEET FB: 5800 presents, 5794 copied, 0 skipped` and
+`SWEET FB: 12000 swaps` (both were 0/3 before), 263 daemons started, and the
+system ran for seven hours without a kernel panic.
+
+**The three changes that made it render, in the order they mattered**
+
+1. **Skip the data migration** — `tools/set-migration-done.py` writes
+   `LastSystemVersion = 20H392` into
+   `/private/var/mobile/Library/Preferences/com.apple.migration.plist`
+   (501:501, 0600) inside `work/rootimg/ios16-root.img`. Without it every boot
+   spends an hour on a migration that never records completion.
+2. **Give the ADT a `/product` node** — `mkadt.py` copies it from the real
+   iPhone X tree at `research/ipsw-x/d22ap.adt`, which never existed here:
+
+   ```bash
+   unzip -o -j <ipsw> 'Firmware/all_flash/DeviceTree.d22ap.im4p'
+   apt-get install -y lzfse
+   python3 tools/adt.py unwrap DeviceTree.d22ap.im4p research/ipsw-x/d22ap.adt
+   python3 tools/mkadt.py apollo.adt --highmem      # 12772 bytes
+   ```
+
+3. **Force CoreAnimation off the GPU path** — backboardd keeps polling
+   `IOAcceleratorES`/`IOAcceleratorESLegacy` (nothing there), so without this it
+   creates its surface and never swaps. `tools/set-launchd-env.py` adds:
+
+   ```
+   com.apple.backboardd   CA_ENABLE_OGL=1  CA_FORCE_LOCAL_SERVER=1  CA_FORCE_DOUBLE_BUFFERING=0
+   com.apple.SpringBoard  CA_ENABLE_OGL=1
+   ```
+
+   (`CA::OGL::SW` is the software rasteriser inside the OGL renderer; the two
+   names were confirmed by grepping `CA_*` strings out of QuartzCore in the
+   dyld shared cache.)
+
+**Boot recipe that works**
+
+```powershell
+# image: work/rootimg/ios16-root.img (migration skipped, CA env set)
+wsl -d Ubuntu-24.04 -u root -- bash -c "cd /mnt/d/redmi_ios/work/boot && fastboot boot shim-kernel4.img"
+```
+
+`shim-kernel4.img` = kernel 0092 (four screenshots) + the ADT with `/product`,
+8 CPUs, no watchdog arming (that broke boot; see below).
+
+**Known crash loops (do not block the GUI)**
+
+- `mediaserverd` 127 crashes: upstream moved
+  `/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin` away to stop this; not done.
+- `CommCenter` 126 crashes: expected without a modem.
+- `PosterBoard` 1, `com.apple.datamigrator` 2.
+
+**Screenshot note:** the 0092 shots at 5 s and 50 s are still black — the Hello
+screen appears minutes in, after Setup starts. Late shots would need a new
+patch (`sweet_fb_shot` at presents 60000+), or just a real photo, which is the
+better artifact.
+
+**Next steps, in order of value**
+
+1. Photograph the Hello screen (the milestone artifact).
+2. Test touch: `SWEET HID: key 0x30 down` already shows key events reaching
+   backboardd; the Novatek path has never been exercised on apollo.
+3. Stop the `mediaserverd` crash loop (move VirtualAudio.plugin).
+4. Only then look at performance: `sweetfb_hz=5` image is prebuilt at
+   `work/boot/shim-kernel-fast.img` if the CPU copy needs to be cheaper.
+
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
