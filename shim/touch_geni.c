@@ -32,6 +32,8 @@
 #define SE_GENI_FORCE_DEFAULT	0x20u
 #define SE_GENI_OUTPUT_CTRL	0x24u
 #define GENI_SER_M_CLK_CFG	0x48u
+#define GENI_IF_DISABLE_RO	0x64u
+#define GENI_FW_REVISION_RO	0x68u
 #define SE_GENI_CLK_SEL		0x7cu
 #define SE_SPI_CPHA		0x224u
 #define SE_SPI_CPOL		0x230u
@@ -47,6 +49,8 @@
 #define SE_GENI_M_IRQ_CLEAR	0x618u
 #define SE_GENI_TX_FIFO		0x700u
 #define SE_GENI_RX_FIFO		0x780u
+#define SE_GENI_TX_FIFO_STATUS	0x800u
+#define SE_GENI_RX_FIFO_STATUS	0x804u
 #define SE_GENI_RX_WATERMARK	0x810u
 #define SE_GENI_RX_RFR_WM	0x814u
 #define SE_GSI_EVENT_EN		0xe18u
@@ -60,7 +64,11 @@
 #define TLMM		0x0F000000UL
 #define TILE_NORTH	0x00900000UL
 #define TILE_SOUTH	0x00500000UL
-#define QUP4_FUNC	78u		/* mux value of the "qup4" function */
+/*
+ * PINGROUP() puts msm_mux_gpio at index 0, so the first named function of a
+ * pin (here qup4) is index 1, not its global position in sm8250_functions.
+ */
+#define QUP4_FUNC	1u		/* index of "qup4" in the pin's own funcs[] */
 
 #define PIN_CLK		8
 #define PIN_MOSI	9
@@ -126,6 +134,51 @@ static int se_wait_done(unsigned us)
 	}
 }
 
+/*
+ * Diagnostic matrix: one byte through SPI_TX_RX under every combination of
+ * FIFO-vs-command order, packing word and clock divider, so a single boot
+ * shows which combination the SE and the chip accept.
+ */
+static void spi_try(const char *tag, int order, uint32_t pack, uint32_t div)
+{
+	wr(SE4 + SE_GENI_TX_PACK_CFG0, pack);
+	wr(SE4 + SE_GENI_RX_PACK_CFG0, pack);
+	wr(SE4 + GENI_SER_M_CLK_CFG, (div << 4) | 1u);
+	delay_us(200);
+	wr(SE4 + SE_GENI_M_IRQ_CLEAR, rd(SE4 + SE_GENI_M_IRQ_STATUS));
+	wr(SE4 + SE_SPI_TX_TRANS_LEN, 1u);
+	wr(SE4 + SE_SPI_RX_TRANS_LEN, 1u);
+	if (order == 0) {
+		wr(SE4 + SE_GENI_M_CMD0, SPI_TX_RX << 27);
+		wr(SE4 + SE_GENI_TX_FIFO, 0x5Au);
+	} else {
+		wr(SE4 + SE_GENI_TX_FIFO, 0x5Au);
+		wr(SE4 + SE_GENI_M_CMD0, SPI_TX_RX << 27);
+	}
+	int rc = se_wait_done(3000);
+
+	con_hex2(tag, "rc=", (uint32_t)(rc == 0 ? 0 : 1),
+	    "rx=", rd(SE4 + SE_GENI_RX_FIFO) & 0xffffu);
+	con_hex2(tag, "irq=", rd(SE4 + SE_GENI_M_IRQ_STATUS),
+	    "txst=", rd(SE4 + SE_GENI_TX_FIFO_STATUS));
+}
+
+static void spi_selftest(void)
+{
+	/* order 0 = command then FIFO, 1 = FIFO then command */
+	spi_try("SPI a", 0, 0xffu, 2u);
+	spi_try("SPI b", 1, 0xffu, 2u);
+	spi_try("SPI c", 0, 0x00u, 2u);
+	spi_try("SPI d", 1, 0x00u, 2u);
+	spi_try("SPI e", 0, 0xffu, 1u);
+	spi_try("SPI f", 1, 0xffu, 1u);
+	/* restore the settings the real transfer path expects */
+	wr(SE4 + SE_GENI_TX_PACK_CFG0, 0xffu);
+	wr(SE4 + SE_GENI_RX_PACK_CFG0, 0xffu);
+	wr(SE4 + GENI_SER_M_CLK_CFG, (2u << 4) | 1u);
+	delay_us(200);
+}
+
 static int se_cmd(uint32_t opcode)
 {
 	wr(SE4 + SE_GENI_M_CMD0, opcode << 27);
@@ -149,8 +202,13 @@ static int geni_spi_init(void)
 	    VOTE_M_AHB | VOTE_S_AHB | VOTE_CORE | VOTE_SE4);
 	delay_us(1000);
 
-	/* Protocol must already be SPI (the bootloader selects it). */
-	uint32_t proto = rd(SE4 + 0x40u) & 0x7u;	/* SE_GENI_STATUS */
+	/*
+	 * Protocol lives in GENI_FW_REVISION_RO bits 15:8 (geni_se_read_proto in
+	 * mainline), not in SE_GENI_STATUS.
+	 */
+	uint32_t fwrev = rd(SE4 + GENI_FW_REVISION_RO);
+	uint32_t proto = (fwrev >> 8) & 0xffu;
+	uint32_t ifdis = rd(SE4 + GENI_IF_DISABLE_RO);
 
 	wr(SE4 + SE_GENI_FORCE_DEFAULT, 1u);
 	wr(SE4 + SE_GENI_OUTPUT_CTRL, 0x7fu);
@@ -172,6 +230,7 @@ static int geni_spi_init(void)
 	wr(SE4 + SE_GENI_CLK_SEL, 0u);
 	wr(SE4 + GENI_SER_M_CLK_CFG, (2u << 4) | 1u);
 
+	con_hex2("SPI fw", "rev=", fwrev, "ifdis=", ifdis);
 	con_hex2("SPI init", "proto=", proto, "clkcfg=", rd(SE4 + GENI_SER_M_CLK_CFG));
 	return proto;
 }
@@ -225,6 +284,7 @@ void test_touch(void)
 	gpio_mux(C_IRQ, 0, 3, 3, 0, 0);
 
 	geni_spi_init();
+	spi_selftest();
 
 	/* Vendor probe order: reset high, eng-reset command, reset high, 10 ms. */
 	delay_us(5000);

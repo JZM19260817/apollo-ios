@@ -1,0 +1,19 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -504,6 +504,16 @@
+ 	printf("SWEET TOUCH: se7 fw=%#x proto=%u status=%#x tx=%#x rx=%#x ios=%#x\n",
+ 	    fw, (fw >> 8) & 0xffu, touch_rd(st.se, SE_STATUS), tx, rx,
+ 	    touch_rd(st.se, 0x908));
++	/*
++	 * Diagnostic: the transport below is I2C-only, but the touch rails
++	 * must be on for any transport. Vote L11C here so the log answers
++	 * whether RPMh works on apollo even when the I2C check rejects us.
++	 */
++	{
++		int power_probe = sweet_rpmh_vreg_enable("ldoc11", 3200);
++
++		printf("SWEET TOUCH: power probe ldoc11 -> %d\n", power_probe);
++	}
+ 	if (((fw >> 8) & 0xffu) != 3u || (touch_rd(st.se, 0x64) & 1u) ||
+ 	    ((tx >> 24) & 0x3fu) != 32u || ((rx >> 24) & 0x3fu) != 32u ||
+ 	    ((tx >> 16) & 0x3fu) < 2u || ((rx >> 16) & 0x3fu) < 2u) {
