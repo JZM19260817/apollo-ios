@@ -423,6 +423,65 @@ Next, in order:
    whether the panel's touch rails (LDO11C via RPMh, GPIO 90 on sweet) are
    actually on for apollo — the DTS shows no separate "board digital power"
    GPIO for apollo, so that call is sweet-specific and should be dropped.
+## Touch: where it stands (2026-11-01 01:45)
+
+### Confirmed on the phone (kernel log, run 41224040342)
+
+```
+SWEET TOUCH: branch 0x17008 halted, not critical (0x80000002)
+SWEET TOUCH: SE4 clocks up, vote=0x41041c0 rcg=0x1
+SWEET TOUCH: se7 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0
+SWEET TOUCH: need ABL-loaded I2C firmware and 32-bit FIFOs; probes skipped
+```
+
+- The SM8250 clock work (0095) is **correct and running**: the SE4 root divider
+  reads back as XO/1 and the vote register took the bits.
+- `proto=1` = **GENI_SE_SPI**, so the SE really is in SPI mode for this panel.
+- The driver then stops on an I2C-only precondition, which is expected: it is
+  an I2C driver and apollo's transport is SPI.
+
+### Confirmed with the shim (bare metal, `work/boot/shim-tpgeni.img`)
+
+```
+SPI fw rev=00000101 ifdis=00000000
+SPI init proto=00000001 clkcfg=00000021
+SPI a rc=00000000 rx=000000FF      (command-then-FIFO, pack 0xff, div 2)
+SPI c rc=00000000 rx=00000001      (same but pack 0x00)
+SPI b/d/f rc=00000001 irq=01000000 (FIFO-then-command: rejected)
+TP 3F000 FF FF FF FF FF FF FF FF
+```
+
+- `proto=1`, FIFO mode, `clkcfg=0x21` (div 2 => 9.6 MHz) all as intended.
+- **Order matters: the command must be issued before the FIFO write.** Writing
+  the FIFO first sets the SE error bit (irq bit 24) and the command never
+  completes.
+- The pin mux fix was decisive: with the wrong value (the global function
+  index 78) every read returned 0x00; with the correct per-pin index **1**
+  the bus reads 0xFF, i.e. MISO is now pulled high and the SE's signals reach
+  the pads. `PINGROUP()` puts `msm_mux_gpio` at index 0, so the first named
+  function of a pin is index 1.
+- The chip still does not drive MISO. The remaining suspects are power
+  (LDO11C through RPMh, which the shim never votes) and CS routing.
+
+### Next step, already built
+
+`xnu/patches/0097-sweet-touch-power-probe.patch` votes `ldoc11` **before** the
+I2C-only rejection and prints `SWEET TOUCH: power probe ldoc11 -> N`, so one
+boot answers whether apollo can power the touch controller through RPMh at
+all. CI run for it: dispatched 01:45.
+
+If the vote works: port `shim/touch_geni.c` into `sweet_touch.c` (the shim
+sequence is proven as far as the SE is concerned) and repeat the probe with
+power on. If it fails: the rails are not RPMh-managed on apollo, and the next
+thing to read is the vendor pm8150l regulator consumers for the touch node.
+
+### Cost of each iteration, and why they are slow tonight
+
+Every kernel test needs one physical power cycle, because XNU has no USB and
+the shim's watchdog arming breaks boot. The shim tests have the same problem
+in reverse: the shim resets into the stock recovery, whose adb needs approval.
+Reading a result therefore costs one button press either way. Batching
+experiments (the six-combination matrix) is the only way to reduce that.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
