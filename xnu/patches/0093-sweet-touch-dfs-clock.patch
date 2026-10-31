@@ -1,0 +1,43 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -144,11 +144,35 @@
+ 	printf("SWEET TOUCH: gcc vote=%#x rcg=%#x cfg=%#x dfs=%#x\n",
+ 	    touch_rd(st.gcc, TOUCH_GCC_VOTE), touch_rd(st.gcc, TOUCH_RCG), cfg, dfs);
+ 	if (dfs & 1u) {
+-		/* SE CLK_SEL=0 selects DFS performance level 0. Do not alter tables. */
+-		cfg = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
+-		if ((cfg & 0x371fu) != 1u) {
+-			printf("SWEET TOUCH: DFS level0=%#x is not XO/1; need clock integration\n", cfg);
+-			return false;
++		/*
++		 * SE CLK_SEL=0 selects DFS performance level 0. On apollo the level
++		 * is programmed to some other rate (0x2601), which would leave the
++		 * controller without the 19.2 MHz it expects. Rewrite level 0 to
++		 * XO/div 1 and trigger the table update; if the hardware still
++		 * reports a different level, drop DFS and program the plain root
++		 * divider instead.
++		 */
++		uint32_t lvl = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
++		if ((lvl & 0x371fu) != 1u) {
++			uint32_t want = (lvl & ~(0x371fu | (1u << 20))) | 1u;
++			touch_wr(st.gcc, TOUCH_RCG + 0x1cu, want);
++			touch_wr(st.gcc, TOUCH_RCG + 0x18u, 1u);	/* DFS update */
++			(void)touch_wait_clear(st.gcc, TOUCH_RCG + 0x18u, 1u);
++			lvl = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
++			printf("SWEET TOUCH: DFS level0 %#x -> %#x\n",
++			    (lvl & 0x371fu) == 1u ? want : 0u, lvl);
++		}
++		if ((lvl & 0x371fu) != 1u) {
++			printf("SWEET TOUCH: leaving DFS for a plain XO root\n");
++			touch_wr(st.gcc, TOUCH_RCG + 0x14u, dfs & ~1u);
++			cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
++			cfg = (cfg & ~(0x371fu | (1u << 20))) | 1u;
++			touch_wr(st.gcc, TOUCH_RCG + 4u, cfg);
++			touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
++			if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
++				printf("SWEET TOUCH: RCG update timeout (dfs off)\n");
++				return false;
++			}
+ 		}
+ 	} else {
+ 		/* XO parent 0, HID divider 1 => 19.2 MHz. No PLL or voltage change. */
