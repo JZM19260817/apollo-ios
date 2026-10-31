@@ -14,10 +14,11 @@ jobs:
           uname -a
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - name: macos hello
         run: |
           sw_vers
           xcodebuild -version || true
+
