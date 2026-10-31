@@ -12,3 +12,12 @@ jobs:
         run: |
           echo "smoke test: $(date -u)"
           uname -a
+
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: macos hello
+        run: |
+          sw_vers
+          xcodebuild -version || true
