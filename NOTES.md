@@ -326,6 +326,103 @@ instead of starting XNU). Do not re-add it without care.
 
 Boot image used for this test: `work/boot/shim-touch.img` (kernel 0093 build +
 ADT with `/product`, 8 CPUs).
+## GENI SPI bring-up (2026-11-01 ~00:40) — the touch driver's real gap
+
+**The kernel touch driver is I2C-only; apollo's touch is SPI.** `sweet_touch.c`
+says so in its own header ("SWEET SE7 FIFO I2C ... Requires ABL-loaded GENI I2C
+firmware") and the whole file contains no SPI code. Everything below is the
+data needed to write a GENI SPI transport, collected from mainline Linux.
+
+### apollo hardware facts (authoritative sources)
+
+| Item | Value | Source |
+| --- | --- | --- |
+| Touch IC | Novatek **NT36675**, `novatek,NVT-ts-spi` | apollo-sm8250.dtsi |
+| Bus | `qupv3_se4_spi` = **QUPv3 SE4**, base **0x990000** | DTS + our earlier probe |
+| SPI clock | 15 MHz requested (we can run 9.6 MHz) | DTS |
+| Pins | CLK 8, MOSI 9, MISO 10, CS 11 → function **"qup4"**; reset 38, irq 39 | DTS + pinctrl-sm8250.c |
+| `qup4` mux value | **78** (index in sm8250_functions[]) | pinctrl-sm8250.c |
+
+### GENI SE4 clock (SM8250, from mainline gcc-sm8250.c)
+
+```
+gcc_qupv3_wrap0_s4_clk_src  cmd_rcgr 0x174d0   (parents: 0 = XO, 1 = GPLL0, 6 = GPLL0 even)
+gcc_qupv3_wrap0_s4_clk      enable 0x52008 bit 14   halt 0x174cc
+gcc_qupv3_wrap_0_s_ahb_clk  enable 0x52008 bit 7    halt 0x17008
+gcc_qupv3_wrap_0_m_ahb_clk  enable 0x52008 bit 6    halt 0x17004
+gcc_qupv3_wrap0_core_clk    enable 0x52008 bit 8    halt 0x23000
+```
+
+SM8250 QUPv3 branches are **vote-gated through 0x52008**; there is no per-SE
+CBCR enable bit, which is why setting one never cleared the halted bit.
+The AHB branches are hardware-controlled: their halt bit stays set even when
+the clock runs (SE registers are readable regardless).
+
+### GENI SPI programming (from mainline qcom-geni-se.c / spi-geni-qcom.c)
+
+Registers are offsets from the SE base:
+
+```
+0x20  GENI_FORCE_DEFAULT      write 1
+0x24  GENI_OUTPUT_CTRL        write 0x7f
+0x48  GENI_SER_M_CLK_CFG      (div << 4) | 1 ; div = se_clk / spi_clk
+0x7c  SE_GENI_CLK_SEL         0 (XO)
+0x224 SE_SPI_CPHA             0
+0x230 SE_SPI_CPOL             0
+0x258 SE_GENI_DMA_MODE_EN     clear bit0 (FIFO mode)
+0x25c SE_SPI_TRANS_CFG        clear bit1 (manual CS)
+0x260 SE_GENI_TX_PACK_CFG0    0xff then 0   (8-bit words, MSB first, 1/FIFO word)
+0x284 SE_GENI_RX_PACK_CFG0    0xff then 0
+0x268 SE_SPI_WORD_LEN         bits_per_word - 4
+0x26c SE_SPI_TX_TRANS_LEN     words
+0x270 SE_SPI_RX_TRANS_LEN     words
+0x600 SE_GENI_M_CMD0          opcode << 27
+0x610 SE_GENI_M_IRQ_STATUS    bit0 = M_CMD_DONE
+0x618 SE_GENI_M_IRQ_CLEAR     write back status
+0x700 SE_GENI_TX_FIFO
+0x780 SE_GENI_RX_FIFO
+0xe18 SE_GSI_EVENT_EN         0
+0xe1c SE_IRQ_EN               0 (this driver polls)
+```
+
+Opcodes (M_CMD0 bits 31:27): `SPI_TX_ONLY 1`, `SPI_RX_ONLY 2`, `SPI_TX_RX 7`,
+`SPI_CS_ASSERT 8`, `SPI_CS_DEASSERT 9`, `SPI_SCK_ONLY 10`.
+
+Sequence per byte: clear IRQ status, write TX/RX lengths, write M_CMD0 with
+SPI_TX_RX, push the byte to the TX FIFO, poll M_CMD_DONE, read the RX FIFO and
+mask to 8 bits.
+
+### What is staged
+
+`shim/touch_geni.c` replaces the bit-banged transport with the sequence above
+and keeps `nvt.c` (the verified Novatek protocol) as-is. It compiles clean
+(`bash build-shim.sh` variant with `touch.c` → `touch_geni.c`, 0 ABS64
+relocations) and is packed at `work/boot/shim-tpgeni.img`.
+
+The no-payload shim path runs `test_touch()`, then `dump_log("LOG1")` +
+`reset()`, so the result lands in the `cache` partition and the phone returns
+to a bootable state by itself — no photo needed.
+
+### Blocked on one button press
+
+The test image was booted at 00:35. The reset landed in the **stock recovery**
+(its IMEM restart reason maps to recovery, not fastboot) and that recovery's
+adb is unauthorised, so the cached log cannot be read until someone power
+cycles into fastboot. That is the only thing standing between us and the
+answer "does the NT36675 answer over GENI SPI".
+
+Next, in order:
+
+1. Power cycle → fastboot → `fastboot boot work/boot/recovery-noauth.img` →
+   read the cache log (`work/tools/pull_shim_log.py`) → look for
+   `TP 3F000` / `TP verdict` / `SPI init proto=`.
+2. If the chip answers: port `touch_geni.c` into the kernel driver
+   (`sweet_touch.c`) behind the same hooks, wire the IRQ or poll the event
+   register, and forward points to `SweetHIDTouch`.
+3. If it does not: check `proto=` (must be 1 = SPI), the clock divider, and
+   whether the panel's touch rails (LDO11C via RPMh, GPIO 90 on sweet) are
+   actually on for apollo — the DTS shows no separate "board digital power"
+   GPIO for apollo, so that call is sweet-specific and should be dropped.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
