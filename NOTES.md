@@ -682,6 +682,62 @@ block ("bootonce-bootloader" into `misc`, shim/ufs.c:ufs_set_bootonce) did not
 work: the phone still landed in recovery. Worth revisiting with the Xiaomi
 bootloader's own command string, or by writing the IMEM restart reason that
 this ABL actually honours.
+## State when the user left (2026-11-01 17:00)
+
+### The kernel under test right now
+
+Run `41288402851` (commit ad27e1f), booted at 16:55 as
+`work/boot/shim-final.img`. It contains the complete stack:
+
+| Patch | Purpose |
+| --- | --- |
+| 0093-0096 | SE4 clocks on SM8250, AHB halt relaxed |
+| 0097 | L11C vote before the I2C-only bail (diagnostic) |
+| 0098 | SPI transport in the kernel + step logging |
+| 0099 | TLMM base 0x0f900000 |
+| 0100 | **reset released by driving the line LOW** |
+| 0101 | **Novatek NT36675: page select, reads, point parsing, HID feed** |
+| 0102 | **panics are mirrored into the UFS log and flushed synchronously** |
+
+Verified in the image: `SE is SPI`, `nvt alive`, `sweet_log_flush_now`.
+
+### What to look for on the next log pull
+
+```
+SWEET TOUCH: SE is SPI, bringing up the NT36675
+SWEET TOUCH: nvt fw=19.e6 geom=... id=...
+SWEET TOUCH: nvt alive, active=0x...
+```
+
+`fw=19.e6` (bytes summing to 0xff) means the firmware-info read works in the
+kernel; `active` becomes non-zero while a finger is down. If instead the log now
+ends with a `SWEET EARLY PANIC:` block, 0102 did its job and the reason is in
+the file - that was the missing feedback loop all day.
+
+### How to pull the log
+
+```
+fastboot boot work/boot/recovery-noauth.img      # from fastboot
+adb devices                                       # must show "recovery"
+bash work/tools/pull-xnu-log-wsl.sh               # -> work/logs/xnu-console.txt
+```
+
+### If touch does not work yet
+
+The shim is the reference: it returns `0D 1C 33 CE ...` for 0x3f000 with the
+same reset and CS handling, so any difference is in the kernel's setup order.
+Compare, in this order: pin mux (8..10 to qup4, 11 as GPIO), reset high 10 ms
+then LOW, SE setup, then one byte. The kernel currently does mux -> reset ->
+setup -> read, which matches the shim.
+
+### The one process problem worth fixing next
+
+Every test costs a physical power cycle because the phone always falls back to
+the stock recovery (whose adb needs approval) and never to fastboot. The shim's
+`ufs_set_bootonce()` writes "bootonce-bootloader" into `misc`, but the phone
+still landed in recovery, so either the ABL wants a different command string or
+the write did not land. Fixing that turns a 30-minute human round trip into a
+scripted loop.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
