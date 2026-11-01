@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -496,6 +496,92 @@
+@@ -496,6 +496,99 @@
  	return 0;
  }
  
@@ -37,6 +37,13 @@
 +{
 +	touch_wr(st.se, 0x600u, (on ? SE_SPI_CS_ON : SE_SPI_CS_OFF) << 27);
 +	(void)se_spi_done(2000);
++}
++
++static void
++se_spi_cs_gpio(int selected)
++{
++	touch_gpio(11, 0, 0, 6, true, !selected);
++	delay(1);
 +}
 +
 +static uint8_t
@@ -78,7 +85,7 @@
 +static void
 +se_spi_read(uint32_t addr, uint8_t *buf, unsigned n)
 +{
-+	se_spi_cs(1);
++	se_spi_cs_gpio(1);
 +	se_spi_xfer(0xffu);
 +	se_spi_xfer((uint8_t)((addr >> 15) & 0xffu));
 +	se_spi_xfer((uint8_t)((addr >> 7) & 0xffu));
@@ -87,13 +94,13 @@
 +	for (unsigned i = 0; i < n; i++) {
 +		buf[i] = se_spi_xfer(0x00u);
 +	}
-+	se_spi_cs(0);
++	se_spi_cs_gpio(0);
 +}
 +
  static bool
  touch_se_init(void)
  {
-@@ -514,11 +600,36 @@
+@@ -514,11 +607,38 @@
  
  		printf("SWEET TOUCH: power probe ldoc11 -> %d\n", power_probe);
  	}
@@ -118,9 +125,11 @@
 +		 * to qup4 first: index 1 in the pin's own funcs list.
 +		 */
 +		printf("SWEET TOUCH: spi step 1 mux\n");
-+		for (pin = 8; pin <= 11; pin++) {
++		for (pin = 8; pin <= 10; pin++) {
 +			touch_gpio(pin, 1, 0, 6, false, false);
 +		}
++		/* CS stays a GPIO: the SE's chip-select never reaches the pad. */
++		touch_gpio(11, 0, 0, 6, true, true);
 +		printf("SWEET TOUCH: spi step 2 setup\n");
 +		se_spi_setup();
 +		printf("SWEET TOUCH: spi step 3 read\n");
