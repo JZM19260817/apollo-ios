@@ -613,6 +613,75 @@ Still open:
    high), then SE setup, then a single byte read.
 3. Once a kernel read returns non-0xff, replace the probe with the real Novatek
    flow (page select, fw info, point packets) and wire it to `SweetHIDTouch`.
+## Touch: the fix is in, waiting for a device test (2026-11-01 15:30)
+
+### What changed and why it should work now
+
+The shim produced stable, repeatable register data and a valid firmware-info
+block only after two things were true:
+
+1. Chip select is driven as a **plain GPIO** (the SE's `SPI_CS_ASSERT`
+   completes without ever moving the pad), and
+2. the reset line is **released by driving it LOW**. The dts says
+   `novatek,reset-gpio = <&tlmm 38 0x00>`, and holding the line high keeps the
+   controller in reset - that is why every earlier read was 0x00 or noise.
+
+```
+TP R low   0D 1C 33 CE ED BE 52 5D
+TP R high  0D 1C 33 CE ED BE 52 5D      identical across three timings
+TP slow    0D 1C 33 CE ED BE 52 5D      => real register data, not noise
+TP fw ver=00000019 type=000000E6        (0x19 + 0xE6 == 0xff, vendor rule)
+TP verdict chip answered over GENI SPI
+```
+
+### The patch stack for touch (all in xnu/patches, in application order)
+
+| Patch | What it fixes |
+| --- | --- |
+| 0093 | DFS is already XO/1; skip the sweet dance |
+| 0094 | enable the sweet branch clocks |
+| 0095 | **SM8250 QUPv3 SE4 clocks**: RCG 0x174d0, vote bits 6/7/8/14 in 0x52008 |
+| 0096 | AHB halt bits are hardware-controlled; do not require them |
+| 0097 | vote L11C before the I2C-only bail so the log shows the rail state |
+| 0098 | SPI transport in the kernel (SE4, 9.6 MHz, 8-bit words, command-then-FIFO) + step logging |
+| 0099 | **TLMM base 0x0f900000** (the driver used sweet's 0x03900000 and aborted) |
+| 0100 | **reset pulse: high 10 ms, then LOW** (release) |
+| 0101 | **Novatek NT36675 over SPI** + point parsing + `touch_report()` HID feed |
+
+0101 compiled clean in run 41280009502. It has not been booted yet.
+
+### How to test when the phone is in fastboot
+
+```
+work/tools/deploy-kernel.py <kernel-dir>      # or pack-kernel.sh + fastboot boot
+```
+
+The kernel logs, in order:
+
+```
+SWEET TOUCH: SE4 clocks up, vote=... rcg=0x1
+SWEET TOUCH: power probe ldoc11 -> 0
+SWEET TOUCH: SE is SPI, bringing up the NT36675
+SWEET TOUCH: nvt fw=19.e6 geom=... id=...
+SWEET TOUCH: nvt alive, active=0x...
+```
+
+Touching the screen should then move the pointer / press on the Hello screen.
+`nvt alive, active=0x1` proves the packet parser sees a finger; if the
+coordinates are inverted or scaled wrong, adjust `nvt_poll()` in patch 0101.
+
+If `nvt fw=00.00` appears, the read path still is not right; the next things to
+try are the CS setup/hold delays and the page-select byte order.
+
+### Reading results without the user (the real bottleneck)
+
+Every kernel test needs one physical power cycle because XNU has no USB and the
+phone falls back to the stock recovery, whose adb requires approval. Attempts
+to make the shim return to fastboot by writing the Android bootloader control
+block ("bootonce-bootloader" into `misc`, shim/ufs.c:ufs_set_bootonce) did not
+work: the phone still landed in recovery. Worth revisiting with the Xiaomi
+bootloader's own command string, or by writing the IMEM restart reason that
+this ABL actually honours.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
