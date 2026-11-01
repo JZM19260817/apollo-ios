@@ -1,0 +1,11 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -605,7 +605,7 @@
+ 
+ /* ---- Novatek NT36675 over the SPI transport above --------------------- */
+ 
+-#define NVT_EVENT_PAGE		0x00000u
++#define NVT_EVENT_PAGE		0x22d00u	/* NT36675_memory_map.EVENT_BUF_ADDR */
+ #define NVT_FWINFO_OFF		0x78u
+ #define NVT_POINT_LEN		65u
+ #define NVT_MAX_FINGERS		10u
