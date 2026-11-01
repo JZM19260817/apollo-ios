@@ -547,6 +547,72 @@ so the rail is on. Keep the single-shot form; do not add a poll loop there.
 - In XNU, `touch_rd(base, off)` needs the `ml_io_map`ed address, not the
   physical one; passing `0x990000` panics with a data abort at a low address.
 - A local named `st` shadows the driver's file-scope `st` struct.
+## Touch state at the end of the long session (2026-11-01 13:35)
+
+### Proven on hardware
+
+The controller is reachable and the whole chain works **in the shim**:
+
+```
+RPMH rc 0                                  LDO11C on through RPMh
+SPI init proto=1 clkcfg=0x21               SE4 in SPI mode, 9.6 MHz
+TP A geni-cs  FF FF FF FF FF FF FF FF      SE chip select: chip silent
+TP B gpio-cs  0D 8C 7B CE 2D 9E 52 5D      CS as GPIO: real data
+TP B 1F600    F3 A7 52 34 D1 8B F8 0B      more real data
+```
+
+So: clocks, power, SPI framing and the chip itself are all fine. The two
+hardware facts that took the longest to find:
+
+1. **The SE's chip-select command does not drive the pad.** `SPI_CS_ASSERT`
+   completes inside the SE, the pad never moves, and the chip ignores the bus.
+   Mux the CS pin as a plain GPIO and toggle it by hand.
+2. **The pin mux value is the index inside that pin's own funcs list.**
+   `PINGROUP()` puts `msm_mux_gpio` at index 0, so the first named function of
+   a pin is `1`. Writing the global function number (78) silently muxes
+   something else and everything reads 0x00.
+
+Two more that cost CI runs:
+
+3. The shim's RPMh TCS writes must be written **once** and read **once**; polling
+   the WAIT/ENABLE registers until they read back breaks the sequence.
+4. `build-shim.sh` derives objects as `out/<stem>.o`; renaming `touch.c` in the
+   compile list is not enough, the link line must change too or the image keeps
+   the stale object. Check with `strings out/Image | grep <new string>`.
+
+### Kernel side: what is fixed and what still fails
+
+Fixed and confirmed in the log:
+
+- 0095 SE4 clocks: `SE4 clocks up, vote=0x41041c0 rcg=0x1`.
+- 0096 relaxed AHB halt check.
+- 0097 L11C vote: `power probe ldoc11 -> 0`.
+- 0099 TLMM base: the driver wrote pin config to `0x03900000` (sweet's
+  TLMM+NORTH); apollo's is `0x0f900000`. Before this the kernel aborted right
+  after `spi step 1 mux`.
+- 0098 with GPIO CS runs all four steps without crashing, but reads
+  `ff ff ff ff ff ff ff ff`.
+
+Still open:
+
+- The kernel probe reads 0xff where the shim reads real data. Remaining
+  differences to chase, in order: the reset pulse timing (0100 adds it, but the
+  boot that included it produced a log whose touch thread only printed
+  `starting in 45 s`, so it is unverified), whether `south` really maps
+  (`0x0f500000`), and the exact CS setup/hold delays the shim used.
+- The touch thread's prints are the only window into it; when a boot ends early
+  the log stops at `starting in 45 s` and tells us nothing.
+
+### Next concrete steps
+
+1. Boot the 0100 kernel again and read the log; if the touch thread prints
+   nothing at all, first establish whether the boot is healthy (look for
+   `presents`/`swaps` lines from the framebuffer before blaming the driver).
+2. Compare the shim's exact sequence against the kernel probe one call at a
+   time: pin mux order (CS last, as a GPIO), reset pulse (10 ms low, 60 ms
+   high), then SE setup, then a single byte read.
+3. Once a kernel read returns non-0xff, replace the probe with the real Novatek
+   flow (page select, fw info, point packets) and wire it to `SweetHIDTouch`.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
