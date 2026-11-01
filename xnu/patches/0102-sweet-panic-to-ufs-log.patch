@@ -1,0 +1,86 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -786,6 +786,52 @@
+ 	}
+ }
+ 
++/*
++ * Synchronous variant of the log thread's write path, for the panic path where
++ * no thread can run. Polled UFS only; no locks, no sleeps.
++ */
++void
++sweet_log_flush_now(void)
++{
++	static uint64_t flushed;
++	static uint64_t seq;
++	uint64_t base = su.first_block + su.nblocks - SWEET_LOG_BLOCKS;
++	void *bounce = (void *)(su.dma + DMA_BOUNCE);
++	uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
++	uint64_t pos;
++	int error = 0;
++
++	if (!su.writable || total == flushed) {
++		return;
++	}
++	pos = total - flushed >= SWEET_LOG_SIZE ? total - SWEET_LOG_SIZE : flushed;
++	while (pos < total && !error) {
++		uint32_t off = (uint32_t)(pos % SWEET_LOG_SIZE);
++		uint32_t blk = off / UFS_BLOCK;
++		uint64_t need = ((uint64_t)off % UFS_BLOCK + (total - pos) + UFS_BLOCK - 1) / UFS_BLOCK;
++		uint32_t n = (uint32_t)MIN(MIN(need, (uint64_t)(SWEET_LOG_SIZE / UFS_BLOCK - blk)),
++		    (uint64_t)(BOUNCE_SIZE / UFS_BLOCK));
++
++		memcpy(bounce, sweet_log_ring + (uint64_t)blk * UFS_BLOCK, n * UFS_BLOCK);
++		error = ufs_write_blocks(base + 1 + blk, n);
++		pos += (uint64_t)(blk + n) * UFS_BLOCK - off;
++	}
++	if (!error) {
++		struct sweet_log_header h = {
++			.magic = { 'S', 'W', 'E', 'E', 'T', 'L', 'O', 'G' },
++			.version = 1, .size = SWEET_LOG_SIZE, .total = total, .seq = ++seq,
++		};
++
++		bzero(bounce, UFS_BLOCK);
++		memcpy(bounce, &h, sizeof(h));
++		error = ufs_write_blocks(base, 1);
++	}
++	if (!error) {
++		(void)ufs_sync_cache();
++	}
++	flushed = total;
++}
++
+ static void
+ sweet_log_start(void)
+ {
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -39,12 +39,16 @@
+ 	}
+ }
+ 
++extern void sweet_log_append(const char *c, int size);
++
+ void
+ sweet_early_putc(char c)
+ {
+ 	if (early_disabled) {
+ 		return;
+ 	}
++	/* Keep the early console (which carries panics) in the persistent log. */
++	sweet_log_append(&c, 1);
+ 	if (!early_started) {
+ 		early_started = 1;
+ 		sweet_early_clear_row();
+@@ -123,6 +127,11 @@
+ 	va_end(copy);
+ 	sweet_early_putc('\n');
+ 	__asm__ volatile("dsb sy" ::: "memory");
++	{
++		extern void sweet_log_flush_now(void);
++
++		sweet_log_flush_now();
++	}
+ }
+ 
+ void
