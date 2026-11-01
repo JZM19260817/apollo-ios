@@ -1,0 +1,33 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -628,6 +628,30 @@
+ 		}
+ 		/* CS stays a GPIO: the SE's chip-select never reaches the pad. */
+ 		touch_gpio(11, 0, 0, 6, true, true);
++		/*
++		 * Release the controller from reset before talking to it. GPIO 38 sits in
++		 * the SOUTH TLMM tile, which the driver does not map, so map it here and
++		 * drive the pad: latch low, enable output, wait, then latch high.
++		 */
++		{
++			vm_offset_t south = ml_io_map(0x0f500000u, 0x10000);
++			uint32_t rcfg;
++
++			if (south != 0) {
++				touch_wr(south, 38u * 0x1000u + 4u, 0u);
++				rcfg = touch_rd(south, 38u * 0x1000u);
++				rcfg &= ~0x3ffu;
++				rcfg |= (8u << 6) | 0x200u;
++				touch_wr(south, 38u * 0x1000u, rcfg);
++				delay(10);
++				touch_wr(south, 38u * 0x1000u + 4u, 2u);
++				delay(60);
++				printf("SWEET TOUCH: reset pulsed, rst=%u\n",
++				    touch_rd(south, 38u * 0x1000u + 4u) & 1u);
++			} else {
++				printf("SWEET TOUCH: south TLMM map failed\n");
++			}
++		}
+ 		printf("SWEET TOUCH: spi step 2 setup\n");
+ 		se_spi_setup();
+ 		printf("SWEET TOUCH: spi step 3 read\n");
