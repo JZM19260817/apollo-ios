@@ -1,0 +1,30 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -541,6 +541,13 @@
+ static uint8_t
+ se_spi_xfer(uint8_t out)
+ {
++	/* Drop anything left from an earlier transfer before starting a new one. */
++	for (unsigned i = 0; i < 8u; i++) {
++		if (!(touch_rd(st.se, 0x804u) & 0x7fu)) {
++			break;
++		}
++		(void)touch_rd(st.se, 0x780u);
++	}
+ 	touch_wr(st.se, 0x26cu, 1u);
+ 	touch_wr(st.se, 0x270u, 1u);
+ 	touch_wr(st.se, 0x600u, SE_SPI_TX_RX_OP << 27);
+@@ -548,6 +555,13 @@
+ 	if (se_spi_done(2000)) {
+ 		return 0xff;
+ 	}
++	/* The command can complete before the received word lands in the FIFO. */
++	for (unsigned i = 0; i < 2000u; i++) {
++		if (touch_rd(st.se, 0x804u) & 0x7fu) {
++			break;
++		}
++		delay(1);
++	}
+ 	return (uint8_t)(touch_rd(st.se, 0x780u) & 0xffu);
+ }
+ 
