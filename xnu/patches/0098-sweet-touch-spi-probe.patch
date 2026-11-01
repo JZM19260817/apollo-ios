@@ -93,7 +93,7 @@
  static bool
  touch_se_init(void)
  {
-@@ -514,11 +600,32 @@
+@@ -514,11 +600,36 @@
  
  		printf("SWEET TOUCH: power probe ldoc11 -> %d\n", power_probe);
  	}
@@ -117,11 +117,15 @@
 +		 * 8). apollo drives the panel over SPI on 8..11, so re-mux those four
 +		 * to qup4 first: index 1 in the pin's own funcs list.
 +		 */
++		printf("SWEET TOUCH: spi step 1 mux\n");
 +		for (pin = 8; pin <= 11; pin++) {
 +			touch_gpio(pin, 1, 0, 6, false, false);
 +		}
++		printf("SWEET TOUCH: spi step 2 setup\n");
 +		se_spi_setup();
++		printf("SWEET TOUCH: spi step 3 read\n");
 +		se_spi_read(0x3f000u, id, sizeof(id));
++		printf("SWEET TOUCH: spi step 4 done\n");
 +		printf("SWEET TOUCH: SPI 3F000 %02x %02x %02x %02x %02x %02x %02x %02x\n",
 +		    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
 +		se_spi_read(0x1f600u, id, sizeof(id));
