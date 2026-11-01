@@ -1,0 +1,136 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -589,6 +589,95 @@
+ 	se_spi_cs_gpio(0);
+ }
+ 
++/* ---- Novatek NT36675 over the SPI transport above --------------------- */
++
++#define NVT_EVENT_PAGE		0x00000u
++#define NVT_FWINFO_OFF		0x78u
++#define NVT_POINT_LEN		65u
++#define NVT_MAX_FINGERS		10u
++
++static vm_offset_t nvt_south;
++
++static void
++nvt_reset(void)
++{
++	uint32_t cfg;
++
++	if (!nvt_south) {
++		nvt_south = ml_io_map(0x0f500000u, 0x10000);
++	}
++	if (!nvt_south) {
++		printf("SWEET TOUCH: south TLMM map failed\n");
++		return;
++	}
++	touch_wr(nvt_south, 38u * 0x1000u + 4u, 2u);	/* latch high */
++	cfg = touch_rd(nvt_south, 38u * 0x1000u);
++	cfg &= ~0x3ffu;
++	cfg |= (8u << 6) | 0x200u;			/* gpio, output, 8 mA */
++	touch_wr(nvt_south, 38u * 0x1000u, cfg);
++	delay(10);
++	touch_wr(nvt_south, 38u * 0x1000u + 4u, 0u);	/* release: low */
++	delay(60);
++}
++
++static void
++nvt_cs(int selected)
++{
++	touch_gpio(11, 0, 0, 6, true, !selected);
++	delay(1);
++}
++
++static void
++nvt_page(uint32_t addr)
++{
++	nvt_cs(1);
++	(void)se_spi_xfer(0xffu);
++	(void)se_spi_xfer((uint8_t)((addr >> 15) & 0xffu));
++	(void)se_spi_xfer((uint8_t)((addr >> 7) & 0xffu));
++	nvt_cs(0);
++}
++
++static void
++nvt_read(uint32_t addr, uint8_t *buf, unsigned len)
++{
++	nvt_page(addr);
++	nvt_cs(1);
++	(void)se_spi_xfer((uint8_t)(addr & 0x7fu));
++	(void)se_spi_xfer(0u);
++	for (unsigned i = 0; i < len; i++) {
++		buf[i] = se_spi_xfer(0u);
++	}
++	nvt_cs(0);
++}
++
++static int
++nvt_poll(void)
++{
++	uint8_t buf[NVT_POINT_LEN];
++	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++	uint32_t mask = 0;
++
++	nvt_read(NVT_EVENT_PAGE, buf, sizeof(buf));
++	for (unsigned i = 0; i < NVT_MAX_FINGERS && i < TOUCH_MAX; i++) {
++		unsigned pos = 1u + 6u * i;
++		uint8_t id = (uint8_t)(buf[pos] >> 3);
++		uint8_t status = (uint8_t)(buf[pos] & 7u);
++
++		if (id == 0 || id > NVT_MAX_FINGERS) {
++			continue;
++		}
++		if (status != 1u && status != 2u) {
++			continue;
++		}
++		x[i] = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
++		y[i] = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
++		mask |= 1u << i;
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
++
+ static bool
+ touch_se_init(void)
+ {
+@@ -743,6 +832,37 @@
+ 		printf("SWEET TOUCH: L11C RPMh enable failed %d; probes skipped\n", power_error);
+ 		goto out;
+ 	}
++	/* apollo drives the panel over SPI; the ICs below speak I2C. */
++	if (((touch_rd(st.se, 0x68) >> 8) & 0xffu) == 1u) {
++		uint8_t fw[17];
++
++		printf("SWEET TOUCH: SE is SPI, bringing up the NT36675\n");
++		touch_gpio(8, 1, 0, 6, false, false);
++		touch_gpio(9, 1, 0, 6, false, false);
++		touch_gpio(10, 1, 0, 6, false, false);
++		touch_gpio(11, 0, 0, 6, true, true);
++		se_spi_setup();
++		nvt_reset();
++		nvt_read(NVT_EVENT_PAGE | NVT_FWINFO_OFF, fw, sizeof(fw));
++		printf("SWEET TOUCH: nvt fw=%02x.%02x geom=%ux%u id=%02x%02x\n",
++		    fw[1], fw[2],
++		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
++		    fw[9], fw[10]);
++		if ((uint8_t)(fw[1] + fw[2]) != 0xffu) {
++			printf("SWEET TOUCH: nvt fw info invalid, stopping\n");
++			goto out;
++		}
++		unsigned nvt_ticks = 0;
++		while (!st.dead) {
++			(void)nvt_poll();
++			if ((++nvt_ticks % 600u) == 0) {
++				printf("SWEET TOUCH: nvt alive, active=%#x\n", st.active);
++			}
++			touch_wait(10);
++		}
++		touch_report(0, st.x, st.y);
++		goto out;
++	}
+ 	touch_gpio(90, 0, 0, 0, true, true); /* board digital power enable */
+ 	touch_wait(10); /* conservative rail settling; not a DT timing value */
+ 	touch_gpio(6, 1, 0, 0, false, false); /* qup11 SDA/SCL, 2 mA */

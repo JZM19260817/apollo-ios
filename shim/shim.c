@@ -22,6 +22,7 @@
 static void dump_log(const char *tag);
 
 void test_touch(void);
+int ufs_set_bootonce(void);
 
 #define IMEM_RESTART_REASON	0x146bf65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -118,6 +119,8 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	con_skip();
 	con_str("RESET", after_s > 20 ? "in 40s" : "in 20s");
 	delay_ms(after_s * 1000);
+	/* Ask for a one-shot fastboot so the next run does not need a button. */
+	con_hex("RESET bcb", (uint32_t)ufs_set_bootonce());
 	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
 	__asm__ volatile("dsb sy" ::: "memory");
 

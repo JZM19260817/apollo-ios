@@ -296,6 +296,45 @@ static uint32_t write_block(uint32_t lba, const void *buf)
 	return scsi(0, cdb, sizeof(cdb), (void *)buf, BLOCK, 2, &ocs, &st);
 }
 
+static int find_part(const char *want, uint32_t *first_lba, uint32_t *nblocks);
+
+/*
+ * Ask the bootloader for a one-shot fastboot boot by writing the Android
+ * bootloader control block in `misc`. Both slots are filled because some ABLs
+ * read the second copy. Used so a test run can return to fastboot on its own
+ * instead of landing in recovery, where adb needs approval.
+ */
+int ufs_set_bootonce(void)
+{
+	static uint8_t buf[BLOCK] __attribute__((aligned(4096)));
+	uint32_t lba = 0, nblk = 0;
+	const char msg[] = "bootonce-bootloader";
+
+	if (find_part("misc", &lba, &nblk))
+		return 1;
+	if (read_blocks(lba, 1, buf))
+		return 2;
+	for (unsigned i = 0; i < 64; i++) {
+		buf[i] = 0;
+	}
+	for (unsigned i = 0; i < sizeof(msg) - 1; i++) {
+		buf[i] = (uint8_t)msg[i];
+		buf[32 + i] = (uint8_t)msg[i];
+	}
+	if (write_block(lba, buf))
+		return 3;
+	for (unsigned i = 0; i < 64; i++) {
+		buf[i] = 0;
+	}
+	if (read_blocks(lba, 1, buf))
+		return 4;
+	for (unsigned i = 0; i < sizeof(msg) - 1; i++) {
+		if (buf[i] != (uint8_t)msg[i])
+			return 5;
+	}
+	return 0;
+}
+
 static int name_eq(const char *a, const char *b)
 {
 	while (*a && *a == *b) {
