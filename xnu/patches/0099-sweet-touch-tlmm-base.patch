@@ -1,0 +1,11 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -24,7 +24,7 @@
+ 
+ #define TOUCH_SE_PA      0x00990000u	/* apollo: QUPv3 SE4 (sweet had SE7 at 0xa84000) */
+ #define TOUCH_GCC_PA     0x00100000u
+-#define TOUCH_NORTH_PA   0x03900000u /* DT TLMM + NORTH (0x500000) */
++#define TOUCH_NORTH_PA   0x0f900000u /* apollo TLMM 0x0f000000 + NORTH 0x900000 */
+ #define TOUCH_GCC_VOTE   0x52008u	/* SM8250 vote register (sweet used 0x5200c) */
+ /*
+  * SM8250: gcc_qupv3_wrap0_s4_clk_src cmd_rcgr. The branches are
