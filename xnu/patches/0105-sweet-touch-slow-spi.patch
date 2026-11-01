@@ -1,0 +1,11 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -868,6 +868,8 @@
+ 		touch_gpio(10, 1, 0, 6, false, false);
+ 		touch_gpio(11, 0, 0, 6, true, true);
+ 		se_spi_setup();
++		/* 19.2 MHz / 16 = 1.2 MHz: the reads looked like bit errors at 9.6. */
++		touch_wr(st.se, 0x48u, (16u << 4) | 1u);
+ 		nvt_reset();
+ 		nvt_read(NVT_EVENT_PAGE | NVT_FWINFO_OFF, fw, sizeof(fw));
+ 		printf("SWEET TOUCH: nvt fw=%02x.%02x geom=%ux%u id=%02x%02x\n",
