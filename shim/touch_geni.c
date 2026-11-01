@@ -333,10 +333,45 @@ void test_touch(void)
 	gpio_mux(C_RST, 0, 0, 8, 1, 1);
 	delay_us(50000);
 	cs_mode = CS_MODE_GPIO;
+
+	/*
+	 * The DTS gives reset-gpio flags 0x00, while the Novatek vendor code
+	 * assumes active-low. Try both polarities, and one slow clock in case the
+	 * 9.6 MHz signal is marginal, then compare.
+	 */
+	gpio_mux(C_RST, 0, 0, 8, 1, 1);
+	delay_us(10000);
+	gpio_mux(C_RST, 0, 0, 8, 1, 0);
+	delay_us(60000);
 	nvt_read_addr(0x3F000, b, 8);
-	dump("TP B gpio-cs", b, 8);
+	dump("TP R low", b, 8);
+
+	gpio_mux(C_RST, 0, 0, 8, 1, 1);
+	delay_us(60000);
+	nvt_read_addr(0x3F000, b, 8);
+	dump("TP R high", b, 8);
+
+	/* Slow clock: 19.2 MHz / 8 = 2.4 MHz, in case 9.6 is marginal. */
+	wr(SE4 + GENI_SER_M_CLK_CFG, (8u << 4) | 1u);
+	delay_us(500);
+	gpio_mux(C_RST, 0, 0, 8, 1, 0);
+	delay_us(10000);
+	gpio_mux(C_RST, 0, 0, 8, 1, 1);
+	delay_us(60000);
+	nvt_read_addr(0x3F000, b, 8);
+	dump("TP slow rst", b, 8);
+	wr(SE4 + GENI_SER_M_CLK_CFG, (2u << 4) | 1u);
+	delay_us(500);
+	nvt_read_addr(0x3F000, b, 8);
+	dump("TP B 3F000", b, 8);
 	nvt_read_addr(0x1F600, b, 8);
 	dump("TP B 1F600", b, 8);
+	nvt_read_addr(0x78, b, 8);
+	dump("TP B 00078", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP B 1F64E", b, 8);
+	nvt_read_addr(0x1F64E, b, 16);
+	dump("TP B fwinfo", b, 16);
 
 	if (nvt_get_fw_info(&info) == 0) {
 		con_hex2("TP fw", "ver=", info.fw_ver, "type=", info.fw_type);
