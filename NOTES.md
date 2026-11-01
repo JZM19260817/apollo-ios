@@ -482,6 +482,71 @@ the shim's watchdog arming breaks boot. The shim tests have the same problem
 in reverse: the shim resets into the stock recovery, whose adb needs approval.
 Reading a result therefore costs one button press either way. Batching
 experiments (the six-combination matrix) is the only way to reduce that.
+## Touch breakthrough: GENI chip-select never reaches the pad (2026-11-01 12:27)
+
+### The finding
+
+With power, clocks and the SPI transport all working, the NT36675 stayed
+silent while the SE drove chip select:
+
+```
+TP A geni-cs  FF FF FF FF FF FF FF FF
+```
+
+Driving the CS pad as a plain GPIO instead - only CS changed, everything else
+identical - the chip answered immediately:
+
+```
+TP B gpio-cs  0D 8C 7B CE 2D 9E 52 5D
+TP B 1F600    F3 A7 52 34 D1 8B F8 0B
+```
+
+So `SPI_CS_ASSERT`/`SPI_CS_DEASSERT` (opcodes 8/9) complete inside the SE but
+do not drive the pad, while the pad muxed to qup4 passes clock and data fine.
+Practical consequence: **use the CS pin as a GPIO output and keep the SE for
+clock/data**. That is enough for a working touch driver.
+
+Supporting state, all measured on the phone:
+
+- `RPMH rc 0` - LDO11C is voted on through RPMh by the shim (see below).
+- `TP lines rst=00000001 irq=00000000` - reset released, IRQ idle low.
+- `proto=1`, `clkcfg=0x21`, `ifdis=0` - SPI, 9.6 MHz, FIFO mode.
+
+### RPMh from bare metal: write once, read once
+
+The port of `sweet_rpmh.c` into `shim/rpmh.c` first failed with
+`TCS wait/enable readback failed`: after writing 7 to the TCS WAIT and ENABLE
+registers the code polled them until it saw 7, and the poll itself broke the
+sequence. Writing both once and reading them once afterwards gives
+
+```
+RPMH w/e wait=00000007 enable=00000007
+RPMH done=00000001 status=00000001
+RPMH rc 0000000000000000
+```
+
+so the rail is on. Keep the single-shot form; do not add a poll loop there.
+
+### What a touch driver still needs
+
+1. Move the CS pin out of qup4 (mux 0, output) and drive it around each
+   transfer; clock/MOSI/MISO stay on qup4.
+2. The Novatek framing is already proven in `shim/nvt.c`
+   (page select, `addr & 0x7f` read with one dummy byte, `| 0x80` write).
+3. `nvt_get_fw_info()` returned non-zero even though the chip answered, so the
+   FW-info block read still needs a look: check the multi-byte read timing and
+   that the page register is re-selected after CS is released.
+4. Then parse point packets (`nvt_parse_points`), convert to the panel's
+   1080x2400 coordinates and feed `SweetHIDTouch`.
+
+### Debugging lessons from today
+
+- `build-shim.sh` derives objects as `out/<stem>.o`; renaming `touch.c` in the
+  file list is not enough, the link line must change too, or the image silently
+  keeps the old object. Always `strings out/Image | grep <new message>`.
+- In XNU, `touch_rd(base, off)` needs the `ml_io_map`ed address, not the
+  physical one; passing `0x990000` panics with a data abort at a low address.
+- A local named `st` shadows the driver's file-scope `st` struct.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

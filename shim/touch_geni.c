@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "console.h"
 #include "nvt.h"
+#include "rpmh.h"
 
 #define GCC		0x100000UL
 #define SE4		0x990000UL
@@ -235,8 +236,23 @@ static int geni_spi_init(void)
 	return proto;
 }
 
+/*
+ * CS variants. 0 = GENI CS command (current), 1 = CS_TOGGLE inside the SE,
+ * 2 = drive the CS pad as a plain GPIO while the SE does clock and data.
+ * The chip not answering with GENI CS and power on is either a routing
+ * difference or a reset-timing one, so try all of them in one boot.
+ */
+#define CS_MODE_GPIO 2
+
+static int cs_mode;	/* 0 = GENI CS command, CS_MODE_GPIO = pad driven by hand */
+
 void nvt_hw_cs(int assert)
 {
+	if (cs_mode == CS_MODE_GPIO) {
+		gpio_mux(C_CS, 0, 0, 8, 1, assert ? 0 : 1);
+		delay_us(2);
+		return;
+	}
 	se_cmd(assert ? SPI_CS_ASSERT : SPI_CS_DEASSERT);
 }
 
@@ -286,6 +302,14 @@ void test_touch(void)
 	geni_spi_init();
 	spi_selftest();
 
+	/* The chip needs LDO11C (3.2 V) before it will answer at all. */
+	{
+		int prc = rpmh_ldo11c_on(3200);
+
+		con_hex("RPMH rc", (uint32_t)prc);
+		delay_us(5000);
+	}
+
 	/* Vendor probe order: reset high, eng-reset command, reset high, 10 ms. */
 	delay_us(5000);
 	nvt_write_addr(0x7FFF80, 0x5A);
@@ -294,8 +318,25 @@ void test_touch(void)
 	con_hex2("TP lines", "rst=", (uint32_t)(rd(C_RST + 4) & 1u),
 	    "irq=", (uint32_t)(rd(C_IRQ + 4) & 1u));
 
+	/* Variant A: the SE drives chip select. */
+	cs_mode = 0;
 	nvt_read_addr(0x3F000, b, 8);
-	dump("TP 3F000", b, 8);
+	dump("TP A geni-cs", b, 8);
+
+	/*
+	 * Variant B: hold CS with a plain GPIO. If the SE's chip-select routing is
+	 * the reason the chip stays silent, this read comes back non-FF.
+	 */
+	nvt_hw_cs(0);
+	gpio_mux(C_RST, 0, 0, 8, 1, 0);
+	delay_us(10000);
+	gpio_mux(C_RST, 0, 0, 8, 1, 1);
+	delay_us(50000);
+	cs_mode = CS_MODE_GPIO;
+	nvt_read_addr(0x3F000, b, 8);
+	dump("TP B gpio-cs", b, 8);
+	nvt_read_addr(0x1F600, b, 8);
+	dump("TP B 1F600", b, 8);
 
 	if (nvt_get_fw_info(&info) == 0) {
 		con_hex2("TP fw", "ver=", info.fw_ver, "type=", info.fw_type);
