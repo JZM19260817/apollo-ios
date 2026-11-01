@@ -1,0 +1,18 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -849,9 +849,13 @@
+ 		    fw[1], fw[2],
+ 		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
+ 		    fw[9], fw[10]);
++		printf("SWEET TOUCH: nvt raw %02x %02x %02x %02x %02x %02x %02x %02x "
++		    "%02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    fw[0], fw[1], fw[2], fw[3], fw[4], fw[5], fw[6], fw[7],
++		    fw[8], fw[9], fw[10], fw[11], fw[12], fw[13], fw[14], fw[15], fw[16]);
+ 		if ((uint8_t)(fw[1] + fw[2]) != 0xffu) {
+-			printf("SWEET TOUCH: nvt fw info invalid, stopping\n");
+-			goto out;
++			printf("SWEET TOUCH: nvt fw check failed (%02x+%02x), polling anyway\n",
++			    fw[1], fw[2]);
+ 		}
+ 		unsigned nvt_ticks = 0;
+ 		while (!st.dead) {
