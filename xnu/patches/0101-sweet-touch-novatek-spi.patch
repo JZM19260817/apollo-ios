@@ -96,7 +96,19 @@
  static bool
  touch_se_init(void)
  {
-@@ -743,6 +832,37 @@
+@@ -729,9 +818,10 @@
+ 		printf("SWEET TOUCH: MMIO mapping failed\n");
+ 		goto out;
+ 	}
+-	if (!touch_clocks() || !touch_se_init()) {
++	if (!touch_clocks()) {
+ 		goto out;
+ 	}
++	(void)touch_se_init(); /* on SPI this is only a diagnostic */
+ 	printf("SWEET TOUCH: TLMM reset=%#x irq=%#x vdd90=%#x; voting L11C through RPMh\n",
+ 	    touch_rd(st.gpio, TOUCH_GPIO_IO(8)), touch_rd(st.gpio, TOUCH_GPIO_IO(9)),
+ 	    touch_rd(st.gpio, TOUCH_GPIO_IO(90)));
+@@ -743,6 +833,37 @@
  		printf("SWEET TOUCH: L11C RPMh enable failed %d; probes skipped\n", power_error);
  		goto out;
  	}
