@@ -19,7 +19,7 @@
 +	uint32_t cfg;
 +
 +	if (!nvt_south) {
-+		nvt_south = ml_io_map(0x0f500000u, 0x10000);
++		nvt_south = ml_io_map(0x0f500000u, 0x40000);
 +	}
 +	if (!nvt_south) {
 +		printf("SWEET TOUCH: south TLMM map failed\n");
