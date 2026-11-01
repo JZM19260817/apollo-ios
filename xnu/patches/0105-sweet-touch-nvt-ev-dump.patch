@@ -1,0 +1,39 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -657,7 +657,36 @@
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0;
+ 
++	static uint8_t prev[8];
++	static unsigned dumps;
++	uint8_t page[32];
++
+ 	nvt_read(NVT_EVENT_PAGE, buf, sizeof(buf));
++	{
++		bool changed = false;
++
++		for (unsigned i = 0; i < sizeof(prev); i++) {
++			if (buf[i] != prev[i]) {
++				changed = true;
++				prev[i] = buf[i];
++			}
++		}
++		if (changed && dumps < 40) {
++			dumps++;
++			printf("SWEET TOUCH: nvt ev %02x %02x %02x %02x %02x %02x %02x %02x\n",
++			    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
++			nvt_read(0x00000u, page, sizeof(page));
++			printf("SWEET TOUCH: nvt p0 %02x %02x %02x %02x %02x %02x %02x %02x "
++			    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
++			    page[0], page[1], page[2], page[3], page[4], page[5], page[6], page[7],
++			    page[8], page[9], page[10], page[11], page[12], page[13], page[14], page[15]);
++			nvt_read(0x1f600u, page, sizeof(page));
++			printf("SWEET TOUCH: nvt pF %02x %02x %02x %02x %02x %02x %02x %02x "
++			    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
++			    page[0], page[1], page[2], page[3], page[4], page[5], page[6], page[7],
++			    page[8], page[9], page[10], page[11], page[12], page[13], page[14], page[15]);
++		}
++	}
+ 	for (unsigned i = 0; i < NVT_MAX_FINGERS && i < TOUCH_MAX; i++) {
+ 		unsigned pos = 1u + 6u * i;
+ 		uint8_t id = (uint8_t)(buf[pos] >> 3);
