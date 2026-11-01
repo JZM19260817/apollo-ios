@@ -738,6 +738,69 @@ the stock recovery (whose adb needs approval) and never to fastboot. The shim's
 still landed in recovery, so either the ABL wants a different command string or
 the write did not land. Fixing that turns a 30-minute human round trip into a
 scripted loop.
+## Touch: vendor protocol found, transport still returns noise (2026-11-02 01:20)
+
+### The vendor driver, which settles the protocol
+
+Fetched from `yspbwx2010/kernel_xiaomi_sm8250_mod` at ref `lunar-release`:
+
+- `drivers/input/touchscreen/nt36523/nt36xxx.c`
+- `drivers/input/touchscreen/nt36523/nt36xxx_mem_map.h`
+- `drivers/input/touchscreen/nt36523/nt36xxx.h`
+
+Saved under `work/logs/`. Facts that matter:
+
+| Item | Value | Was our code right? |
+| --- | --- | --- |
+| `NT36675_memory_map.EVENT_BUF_ADDR` | **0x22d00** | no - we used 0x00000 |
+| fw info | `EVENT_BUF_ADDR \| 0x78` = **0x22d78** | no |
+| point data | `EVENT_BUF_ADDR \| 0` | no |
+| page select | `{0xff, (addr >> 15) & 0xff, (addr >> 7) & 0xff}` | yes |
+| read first byte | `addr & 0x7f` | yes |
+| write first byte | `addr \| 0x80` | yes |
+| `DUMMY_BYTES` | 1 | effectively yes |
+| data position | `rbuf + 2`, i.e. two clocks after the address byte | yes |
+| `POINT_DATA_LEN` | 65 | yes |
+| point layout | `point_data[1 + 6 * i]` .. `[6 + 6 * i]` | yes |
+| fw info read length | 39 bytes, `ts->fw_ver = buf[1]` | close (we read 17) |
+
+`nvt_set_page()` in the vendor driver is byte-for-byte what the driver does, so
+the page encoding was never the problem.
+
+### What the phone says now
+
+With the address corrected to 0x22d00 the block reads:
+`d3 1d d8 a4 f7 a0 a9 82 ...` - different bytes every boot, still noise-like.
+
+Trying the vendor's single-transaction read (one SE command for the whole block)
+returns all zeros: the command never completes, most likely because the SE TX
+FIFO is far shallower than 18 words or because the FIFO must be filled
+differently for multi-word transfers. That patch (0109) is dropped.
+
+### The remaining hypothesis, and how to test it cheaply
+
+The per-byte path leaves microsecond gaps inside one chip-select window. The
+Novatek controller expects one continuous clock burst per transfer. Two ways
+forward, in order of cost:
+
+1. **Shim first, it is free.** The shim has the same SE and no kernel panic risk.
+   Give it the 0x22d00 address and the point parser, then see whether it reads
+   stable data and reacts to a finger. If the shim also reads noise, the problem
+   is in the SE transfer mode, not in XNU.
+2. If the shim is stable, make the kernel match the shim exactly (one SE command
+   per byte was already the shim's method, so the gap theory would be wrong and
+   the difference is elsewhere: pin drive strength, CS timing, or the SE clock
+   divider).
+
+Multi-word transfers need `SE_GENI_TX_FIFO_STATUS` checked before each word and
+`SE_GENI_RX_FIFO_STATUS` drained properly; the current burst code writes 18 words
+blindly, which is why it returns zeros.
+
+### Where the code stands
+
+Patches 0098-0108 are in `xnu/patches` and compile. 0101 is the Novatek driver,
+0104 adds the raw dumps, 0108 fixes the event-buffer address. `shim/*` has the
+working bare-metal SPI transport and the RPMh vote that powers L11C.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
