@@ -801,6 +801,56 @@ blindly, which is why it returns zeros.
 Patches 0098-0108 are in `xnu/patches` and compile. 0101 is the Novatek driver,
 0104 adds the raw dumps, 0108 fixes the event-buffer address. `shim/*` has the
 working bare-metal SPI transport and the RPMh vote that powers L11C.
+## The phone now boots iOS by itself (2026-11-02 20:10)
+
+### What changed
+
+`boot` was flashed with a self-contained image built by `work/tools/pack-kernel.sh`:
+
+    kernel  = shim/out/Image        (bare-metal loader)
+    ramdisk = payload.bin           (XNU kernel + apollo ADT + cmdline)
+    dtb     = apollo device tree
+
+The iOS root stays in the `userdata` partition, so no other partition changed.
+
+### Recovery path (important)
+
+The stock Android boot image was backed up first, through the no-auth recovery:
+
+    adb exec-out 'dd if=/dev/block/by-name/boot bs=1048576' > work/boot/boot-backup.img
+
+- `work/boot/boot-backup.img`, 134,217,728 bytes, md5 `ff49c9aac1e7b2c735d430a86680f996`
+- restore with `fastboot flash boot work/boot/boot-backup.img`
+
+The image that was flashed is `work/boot/shim-evaddr.img` (run 41327435043, patches
+0098-0108). It boots to the Hello screen on its own.
+
+### Touch status, honest summary
+
+Everything except the SE data path is proven:
+
+| Layer | State | Evidence |
+| --- | --- | --- |
+| SE4 clocks | works | `SE4 clocks up, rcg=0x1` |
+| Touch power (L11C) | works | `power probe ldoc11 -> 0` |
+| CS routing | solved | CS as GPIO, SE never drives the pad |
+| Reset polarity | solved | released by driving the line LOW |
+| Page select / masks | match vendor | nt36xxx.c reviewed line by line |
+| Event address | corrected | 0x22d00 per NT36675_memory_map |
+| **Data sampled from MISO** | **not reliable** | `BOOT_RDY` reads 0x9a, which cannot be a status bit |
+
+The reads are repeatable within one boot but look random across boots and across
+addresses, and the event buffer never changes while a finger is on the screen.
+That is a sampling problem in how the SE is driven, not a protocol problem.
+
+### Next idea for touch (not tried yet)
+
+Bypass the SE: drive CLK/MOSI/CS as GPIOs and sample MISO as a GPIO, i.e. the
+same bit-banged transport the shim already had, but with the vendor's 0x22d00
+event address and the handshake/BOOT_RDY checks. If bit-banging returns sane
+status bits, the chip is fine and the SE configuration is the culprit; if it also
+returns noise, the wiring or power sequencing is wrong. The shim makes that a
+two-minute loop instead of a kernel rebuild.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

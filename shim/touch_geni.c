@@ -334,6 +334,54 @@ void test_touch(void)
 	delay_us(50000);
 	cs_mode = CS_MODE_GPIO;
 
+	/* NT36675_memory_map.EVENT_BUF_ADDR = 0x22d00 (vendor nt36xxx_mem_map.h). */
+	nvt_read_addr(0x22D78, b, 16);
+	dump("TP FWINFO", b, 16);
+	nvt_read_addr(0x22D78, b, 16);
+	dump("TP FWINFO2", b, 16);
+	/* Key status registers from the vendor driver. */
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP BOOT_RDY", b, 8);
+	nvt_read_addr(0x22D51, b, 8);
+	dump("TP HANDSHAKE", b, 8);
+	nvt_read_addr(0x22D50, b, 8);
+	dump("TP HOSTCMD", b, 8);
+	nvt_read_addr(0x3F0FE, b, 8);
+	dump("TP SWRST_N8", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP CHIPID", b, 8);
+
+	/* Watch the event buffer for 20 s so a finger during boot is caught. */
+	{
+		uint8_t prev[16], cur[16];
+		unsigned changes = 0;
+
+		nvt_read_addr(0x22D00, prev, sizeof(prev));
+		dump("TP EV idle", prev, 16);
+		con_str("TP ACTION", "TOUCH THE SCREEN FOR 20 s");
+		for (unsigned i = 0; i < 200u; i++) {
+			unsigned d = 0;
+
+			delay_us(100000);
+			nvt_read_addr(0x22D00, cur, sizeof(cur));
+			for (unsigned j = 0; j < sizeof(cur); j++) {
+				if (cur[j] != prev[j]) {
+					d++;
+				}
+			}
+			if (d) {
+				if (changes < 12) {
+					dump("TP EV CHG", cur, 16);
+				}
+				changes++;
+				for (unsigned j = 0; j < sizeof(cur); j++) {
+					prev[j] = cur[j];
+				}
+			}
+		}
+		con_hex("TP EV changes", changes);
+	}
+
 	/*
 	 * The DTS gives reset-gpio flags 0x00, while the Novatek vendor code
 	 * assumes active-low. Try both polarities, and one slow clock in case the
