@@ -400,6 +400,29 @@ void test_touch(void)
 	dump("TP FWINFO", b, 16);
 	nvt_read_addr(0x22D78, b, 16);
 	dump("TP FWINFO2", b, 16);
+	/*
+	 * The vendor leaves reset HIGH (released) and never touches a regulator.
+	 * Simply not driving the pin keeps whatever the bootloader set, which is
+	 * the state Android runs in.
+	 */
+	con_str("TP RESET", "left untouched, reading status");
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP FREE BOOT_RDY", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP FREE CHIPID", b, 8);
+	nvt_read_addr(0x3F000, b, 8);
+	dump("TP FREE 3F000", b, 8);
+
+	/* Reset released HIGH, as the vendor driver does. */
+	gpio_mux(C_RST, 0, 0, 8, 1, 0);
+	delay_us(20000);
+	gpio_mux(C_RST, 0, 0, 8, 1, 1);
+	delay_us(200000);
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP HIGH BOOT_RDY", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP HIGH CHIPID", b, 8);
+
 	/* Key status registers from the vendor driver. */
 	nvt_read_addr(0x3F10D, b, 8);
 	dump("TP BOOT_RDY", b, 8);

@@ -908,6 +908,36 @@ Everything else is done and documented:
 - The shim under `work/ios-apollo/shim` builds with `build-touch-rpmh.sh` and
   contains the SPI transport, the RPMh vote, the bit-bang comparison and the
   20-second event-buffer watch.
+
+### Final data point: reset state is irrelevant (2026-11-02 21:10)
+
+Leaving GPIO 38 completely untouched (the state the bootloader hands over), then
+driving it low, then releasing it high for 200 ms all return the *same* bytes
+for the same address:
+
+`
+TP FREE BOOT_RDY  9B 7C DA 89 00 E8 D4 A8     pin untouched
+TP HIGH BOOT_RDY  9B 7C DA 89 00 E8 D4 A8     released HIGH for 200 ms
+TP R low / R high  identical at 0x3f000       either level
+`
+
+BOOT_RDY never reads 0x01. A live controller would react to its reset pin, so
+the chip is not answering under any condition we can produce from software.
+
+Two hardware questions remain, and neither can be settled in code:
+
+1. **Where does the touch get its power?** The vendor driver
+   (
+t36xxx.c, work/logs/) contains no regulator or LDO call at all, so the
+   rail is enabled elsewhere - most likely together with the panel supply by the
+   bootloader. The display works in our system, but that does not prove the touch
+   rail is on.
+2. **Is MISO really gpio10?** The dts muxes gpio8/9/10 to qup4 plus ts_cs on
+   gpio11, but that mapping was never verified electrically.
+
+A multimeter on the touch connector while Android runs would answer both in
+minutes. Worth doing before any further software work.
+
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
