@@ -975,6 +975,69 @@ photographed.
 Useful side facts from the video: the shim's framebuffer console is readable at
 1080x1920 in a phone camera video, and `proto 1` confirms the SE is in SPI mode
 even in this minimal test.
+## Touch: Android works, our SE never sees the chip (2026-11-03 01:30)
+
+### The decisive experiments of this session
+
+Reading the shim's own screen from phone videos (the UFS log stopped updating,
+so the framebuffer console became the channel) produced these results:
+
+**1. The SE is configured correctly.** Register read-back after `geni_setup()`:
+
+```
+SE  cgc 0x7F      mclk 0x21        clock gating off, XO/2 = 9.6 MHz
+SE  clksel 0x0    fwr 0x101        XO source, protocol = SPI
+SE  dma 0x0       txpack 0xFF      FIFO mode, 8-bit packing
+SE  wordlen 0x4   transcfg 0x0     8-bit words, manual CS
+SE  rxpack 0xFF   dmacfg 0x0F
+```
+
+Every value matches what `spi-geni-qcom.c` + `qcom-geni-se.c` would program,
+including `GENI_CGC_CTRL` (0x28) and `SE_DMA_GENERAL_CFG` (0xe30), which the
+first attempt had missed entirely.
+
+**2. The vendor's bring-up order is right but does not help.** From the working
+recovery kernel's dmesg plus `nt36xxx.c`:
+
+```
+nvt_gpio_config()      reset LOW
+nvt_eng_reset()        SPI 0x5a -> 0x7fff80   (while still in reset)
+gpio_set_value(rst,1)  release HIGH
+msleep(10)
+nvt_ts_check_chip_ver_trim(0x3f004)
+```
+
+Implemented exactly; `TRIM` still reads `7B CE AD 9E ...` where the working
+Android driver reads `0E 00 00 72 66 03` (0x036672 = NT36675).
+
+**3. The data does not depend on the clock.** The same bytes come back at
+divider 1, 2, 4 and 8 (i.e. 19.2, 9.6, 4.8 and 2.4 MHz). A responding chip
+would have to change with the sampling rate; this is crosstalk on an undriven
+MISO line.
+
+**4. Power votes do not change it.** VDD (LDO11C at 3.0 V) and the 1.8 V I/O
+rail (LDO1) both vote successfully through RPMh (`rpmh vdd 0`, `rpmh io1 0`),
+and `TRIM` is unchanged. The vendor driver contains no regulator calls at all,
+so on a normal boot something else - most likely the bootloader or the panel
+power sequence - enables the rails.
+
+### Conclusion
+
+The touch controller never drives MISO in our environment. Everything the SE
+side can control has been verified correct, so the cause is outside it: a supply
+rail we cannot identify from software, or a pin that is not what the dts says.
+Android's driver working proves the hardware itself is healthy - the panel and
+touch were verified again in recovery after all of these tests.
+
+### What would actually settle it
+
+1. A kernel with `/dev/mem` (`CONFIG_STRICT_DEVMEM=n`) in a recovery image would
+   let us dump the live SE4 window and the PMIC state while Android drives the
+   touch, which would show both the exact SE programming and whether a rail is
+   on that we never vote.
+2. Failing that, a logic analyser on MISO during an Android boot.
+3. Or find the Xiaomi touch power sequence in the ABL/`xiaomi_touch` sources:
+   the driver itself has none, so it is the bootloader or the panel driver.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

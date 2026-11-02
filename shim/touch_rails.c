@@ -178,15 +178,18 @@ static void nvt_read(uint32_t addr, uint8_t *buf, unsigned n)
  */
 #define LDO_C_BASE	0x40900u
 
-static void show_rail(unsigned n)
+static void show_rail(unsigned n, unsigned mv)
 {
 	uint32_t addr = LDO_C_BASE + (n - 1u) * 0x100u;
 	uint8_t b[4];
-	int sent = rpmh_send(addr, 3000);
+
+	/* Print before the vote so a crash still identifies the rail. */
+	con_hex2("rail", "n", n, "volts", mv);
+	int sent = rpmh_send(addr, mv);
 
 	delay_us(40000);
 	nvt_read(0x3F10D, b, 4);
-	con_hex2("rail", "n", n, "rdy", ((uint32_t)b[0] << 8) | b[1]);
+	con_hex("rail rdy", ((uint32_t)b[0] << 8) | b[1]);
 	con_hex("rail send", (uint32_t)sent);
 }
 
@@ -202,18 +205,11 @@ void test_touch(void)
 	proto = geni_setup();
 	con_hex("proto", (uint32_t)proto);
 
-	show_rail(1u);
-	show_rail(2u);
-	show_rail(3u);
-	show_rail(4u);
-	show_rail(5u);
-	show_rail(6u);
-	show_rail(7u);
-	show_rail(8u);
-	show_rail(9u);
-	show_rail(10u);
-	show_rail(11u);
-	show_rail(12u);
+	show_rail(6u, 2900u);
+	show_rail(7u, 3000u);
+	show_rail(9u, 2900u);
+	show_rail(10u, 3300u);
+	show_rail(11u, 3000u);
 
 
 	con_str("RAIL", "sweep done, halted");
