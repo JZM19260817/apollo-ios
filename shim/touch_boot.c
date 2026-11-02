@@ -242,21 +242,26 @@ void test_touch(void)
 	con_str("BOOT", "reset released, chip check");
 
 	/* 3. chip version trim */
-	/* Same source, different dividers: does the sampling ever line up? */
-	wr(SE4 + 0x48u, (1u << 4) | 1u);
-	delay_us(500);
+	/*
+	 * SRC_SEL = 1 is GPLL0 (300 MHz), so the previous divider of 2 ran the SPI
+	 * clock at 150 MHz - ten times the 15 MHz the panel is specified for. Try
+	 * the dividers that land in range.
+	 */
+	con_hex("mclk before", rd(SE4 + 0x48u));
+	wr(SE4 + 0x48u, (20u << 4) | 1u);
+	delay_us(1000);
 	nvt_read(0x3F004u, b, 8);
-	dump4("DIV1", b, 8);
-	wr(SE4 + 0x48u, (4u << 4) | 1u);
-	delay_us(500);
+	dump4("DIV20", b, 8);
+	wr(SE4 + 0x48u, (30u << 4) | 1u);
+	delay_us(1000);
 	nvt_read(0x3F004u, b, 8);
-	dump4("DIV4", b, 8);
-	wr(SE4 + 0x48u, (8u << 4) | 1u);
-	delay_us(500);
+	dump4("DIV30", b, 8);
+	wr(SE4 + 0x48u, (60u << 4) | 1u);
+	delay_us(1000);
 	nvt_read(0x3F004u, b, 8);
-	dump4("DIV8", b, 8);
-	wr(SE4 + 0x48u, (2u << 4) | 1u);
-	delay_us(500);
+	dump4("DIV60", b, 8);
+	wr(SE4 + 0x48u, (20u << 4) | 1u);
+	delay_us(1000);
 	nvt_read(0x3F004u, b, 8);
 	dump4("TRIM", b, 8);
 	nvt_read(0x3F0FEu, b, 8);

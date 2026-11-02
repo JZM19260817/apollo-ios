@@ -1038,6 +1038,74 @@ touch were verified again in recovery after all of these tests.
 2. Failing that, a logic analyser on MISO during an Android boot.
 3. Or find the Xiaomi touch power sequence in the ABL/`xiaomi_touch` sources:
    the driver itself has none, so it is the bootloader or the panel driver.
+## Touch: official DTB and clock investigation (2026-11-03 01:45)
+
+### What the compiled boot DTB says
+
+Decompiled the exact DTB the bootloader hands over
+(`/root/ios-apollo/dtb/boot_unpacked/dtb`, 37157 lines) and read the touch node:
+
+```
+ts_novatek {
+    compatible = "novatek,NVT-ts-spi";
+    spi-max-frequency = <0xe4e1c0>;          /* 15 MHz */
+    novatek,reset-gpio = <&tlmm 0x26 0>;     /* gpio 38 */
+    novatek,irq-gpio   = <&tlmm 0x27 0x2001>;/* gpio 39, active low + pull up */
+    pinctrl-0 = <ts_int_active ts_reset_active ts_cs_active>;
+    pinctrl-1 = <... suspends ...>;
+}
+```
+
+- **No regulator property of any kind.** The touch supply is not described in the
+  device tree, so the bootloader or the panel power sequence enables it.
+- The three active pinctrl states are only IRQ (gpio39, pull-down), reset
+  (gpio38, pull-up) and CS (gpio11 -> qup4). There is no power-enable pin.
+- The SPI controller node (`spi@990000`) is enabled and has a child
+  `touch_spi@0 { compatible = "xiaomi,spi-for-tp"; }`, but that proxy driver is
+  not in the open-source kernel (it lives in the closed vendor tree), and the
+  Novatek driver itself registers as a normal SPI driver.
+
+Xiaomi's official kernel (`MiCode/Xiaomi_Kernel_OpenSource`, branch
+`apollo-q-oss`) ships no vendor DTS at all, so the DTB above is the most
+authoritative source available.
+
+### The clock was ten times too fast
+
+Reading back the clock tree showed the RCG parent selection was **1 = GPLL0**,
+not XO as assumed:
+
+```
+RCG cmd 00000000  cfg 00000001     SRC_SEL = 1 -> GPLL0
+SE  mclk 00000021                  divider 2
+```
+
+So every earlier run clocked the SPI bus at roughly **150 MHz** against a
+15 MHz specification. Retesting with dividers 20, 30 and 60 (15, 10 and 5 MHz):
+
+```
+DIV20 a 00003BCE b 0000AD9E
+DIV20 c 0000524D d 0000ED8B
+```
+
+The bytes change with the divider (0x7BCC -> 0x3BCE), so the clock really is
+being altered, but the value is still nothing like the chip id `0E 00 00 72 66 03`
+that Android reads.
+
+### Where this leaves it
+
+Verified correct: SE protocol, packing, word length, CS mode, DMA mode, clock
+gating, the vendor's `eng_reset -> reset high -> 10 ms -> read` order, and now
+the SPI clock range. Verified working: the same controller and chip under
+Android's kernel.
+
+What is left cannot be reached from software we control today:
+
+1. The actual supply rail. It is not in the DTS, the driver has no regulator
+   call, and voting L11C and the 1.8 V LDOs changes nothing. A kernel with
+   `/dev/mem` in a recovery image (CONFIG_STRICT_DEVMEM=n) would let us dump the
+   live SE window and PMIC state while Android drives the panel.
+2. Whether gpio 9/10 really are MOSI/MISO here. The DTS muxes 8/9/10 to qup4 but
+   never says which is which; a logic analyser or a scope settles it.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
