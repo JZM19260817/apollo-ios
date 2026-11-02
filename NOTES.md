@@ -938,6 +938,43 @@ t36xxx.c, work/logs/) contains no regulator or LDO call at all, so the
 A multimeter on the touch connector while Android runs would answer both in
 minutes. Worth doing before any further software work.
 
+### Reading the shim screen directly (2026-11-03 00:20)
+
+The shim's on-screen console turned out to be the reliable channel: the UFS log
+stopped updating once the rail sweep was added, but a phone video of the screen
+showed exactly where it stops.
+
+Frame at 10 s of the video:
+
+```
+RAIL   sweep: SE4 + PMIC supplies
+proto  0000000000000001
+```
+
+So the sweep hangs in the very first `rpmh_find("ldoc1")`: the command-db lookup
+works in the kernel (`ldoc11 addr=0x41300 slave=4` appears in the kernel log) but
+not in bare metal, where the dictionary walk faults or spins.
+
+Fix: do not look the address up. Qualcomm spaces the PM8150L LDO resources
+evenly, so with ldoc11 = 0x41300:
+
+    ldocN = 0x40900 + (N - 1) * 0x100      (ldoc1 = 0x40900 ... ldoc12 = 0x41400)
+
+`work/boot/shim-ldo.img` (source `shim/touch_rails.c`) votes each of the twelve
+PM8150L LDOs at 3.0 V and prints one line per rail:
+
+```
+rail   n 0000000000000003  rdy 9B7E
+rail send 0000000000000000
+```
+
+The rail whose `rdy` stops being `0x9B7E` is the one the controller needs. The
+image halts after the sweep instead of rebooting, so the result can be
+photographed.
+
+Useful side facts from the video: the shim's framebuffer console is readable at
+1080x1920 in a phone camera video, and `proto 1` confirms the SE is in SPI mode
+even in this minimal test.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
