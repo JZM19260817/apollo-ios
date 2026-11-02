@@ -851,6 +851,63 @@ event address and the handshake/BOOT_RDY checks. If bit-banging returns sane
 status bits, the chip is fine and the SE configuration is the culprit; if it also
 returns noise, the wiring or power sequencing is wrong. The shim makes that a
 two-minute loop instead of a kernel rebuild.
+## Touch: the controller never drives MISO (2026-11-02 20:50) - investigation closed
+
+### The decisive measurement
+
+Three reset timings, two chip-select methods and two clock rates all return the
+same bytes for a given address, and the bytes do not change when the reset line
+is held low versus released:
+
+```
+TP R low    0D 98 73 CE ED BE 52 5D     reset pin driven LOW
+TP R high   0D 98 73 CE ED BE 52 5D     reset pin driven HIGH   (identical)
+TP R high rdy 9B 7E C2 89 00 E8 D4 A8    BOOT_RDY with reset high
+TP BOOT_RDY   9B 7E C2 89 00 E8 D4 A8    same register, identical
+BB CHIPID     FF FF FF FF FF FF FF FF    bit-banged SPI: line undriven
+```
+
+`BOOT_RDY` (0x3f10d) must read 0x01 when firmware is running; it reads 0x9b, and
+it reads exactly the same with the reset pin in either state. A real register
+would react to reset. The stable-but-meaningless bytes are crosstalk picked up by
+a **floating MISO line**, which is also why they are reproducible within a boot
+yet vary between boots.
+
+Conclusion: **the NT36675 never drives MISO.** It is not answering at all, so
+every value the driver has read is noise, and no amount of protocol work can fix
+that.
+
+### Why this matters for the next attempt
+
+The remaining unknown is hardware, not software:
+
+1. **Power.** The L11C vote was inherited from the sweet port; it returns success
+   through RPMh but there is no evidence it is the touch rail on apollo.
+   Candidates worth voting one at a time: other PM8150L LDOs, and the panel's
+   VDDI (the touch may share it). A multimeter on the touch connector while
+   Android runs would settle it in a minute.
+2. **MISO routing.** The dts muxes gpio8/9/10 to qup4 plus a separate ts_cs on
+   gpio11, which matches CLK/MOSI/MISO/CS as assumed, but that has not been
+   verified electrically.
+
+Everything else is done and documented:
+
+- SE4 clocks, L11C vote path, CS-as-GPIO, reset handling, page-select encoding,
+  read masks, event address 0x22d00 and point layout all match the vendor driver
+  (`work/logs/nt36xxx.c`, `nt36xxx_mem_map.h`, `nt36xxx.h`).
+- The shim can read and write the bus and now also bit-bangs SPI for comparison.
+
+### State of the phone at handoff
+
+- `boot` holds `work/boot/shim-evaddr.img`, so the phone powers straight into
+  iOS and shows the Hello screen. Android's original boot image is backed up at
+  `work/boot/boot-backup.img` (md5 `ff49c9aac1e7b2c735d430a86680f996`).
+- iOS root lives in the `userdata` partition; no other partition was touched.
+- Patches 0098-0108 are in `xnu/patches`; 0109 (burst transfer) was dropped
+  because the SE command never completed.
+- The shim under `work/ios-apollo/shim` builds with `build-touch-rpmh.sh` and
+  contains the SPI transport, the RPMh vote, the bit-bang comparison and the
+  20-second event-buffer watch.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

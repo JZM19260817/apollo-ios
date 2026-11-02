@@ -267,6 +267,67 @@ uint8_t nvt_hw_xfer(uint8_t out)
 	return (uint8_t)(rd(SE4 + SE_GENI_RX_FIFO) & 0xffu);
 }
 
+/* ---- bit-banged SPI over the same four pins (bypasses the SE) --------- */
+static void
+bb_dir(int out)
+{
+	gpio_mux(C_CLK, 0, 0, 6, 1, 0);
+	gpio_mux(C_MOSI, 0, 0, 6, 1, 0);
+	gpio_mux(C_CS, 0, 0, 6, 1, 1);
+	gpio_mux(C_MISO, 0, 3, 3, 0, 0);
+	(void)out;
+}
+
+static void
+bb_set(uintptr_t cfg, int v)
+{
+	uint32_t io = rd(cfg + 4);
+
+	wr(cfg + 4, (io & ~2u) | (v ? 2u : 0u));
+}
+
+static int
+bb_get(uintptr_t cfg)
+{
+	return (int)(rd(cfg + 4) & 1u);
+}
+
+static uint8_t
+bb_xfer(uint8_t out)
+{
+	uint8_t in = 0;
+
+	for (int i = 7; i >= 0; i--) {
+		bb_set(C_MOSI, (out >> i) & 1);
+		delay_us(1);
+		bb_set(C_CLK, 1);
+		delay_us(1);
+		in = (uint8_t)((in << 1) | (uint8_t)bb_get(C_MISO));
+		bb_set(C_CLK, 0);
+		delay_us(1);
+	}
+	return in;
+}
+
+static void
+bb_read(uint32_t addr, uint8_t *buf, unsigned n)
+{
+	bb_set(C_CS, 0);
+	bb_xfer(0xffu);
+	bb_xfer((uint8_t)((addr >> 15) & 0xffu));
+	bb_xfer((uint8_t)((addr >> 7) & 0xffu));
+	bb_set(C_CS, 1);
+	delay_us(2);
+	bb_set(C_CS, 0);
+	bb_xfer((uint8_t)(addr & 0x7fu));
+	bb_xfer(0u);
+	for (unsigned i = 0; i < n; i++) {
+		buf[i] = bb_xfer(0u);
+	}
+	bb_set(C_CS, 1);
+	delay_us(2);
+}
+
 /* ---- probe ------------------------------------------------------------- */
 
 static void dump(const char *tag, const uint8_t *b, unsigned n)
@@ -396,6 +457,8 @@ void test_touch(void)
 
 	gpio_mux(C_RST, 0, 0, 8, 1, 1);
 	delay_us(60000);
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP R high rdy", b, 8);
 	nvt_read_addr(0x3F000, b, 8);
 	dump("TP R high", b, 8);
 
@@ -420,6 +483,21 @@ void test_touch(void)
 	dump("TP B 1F64E", b, 8);
 	nvt_read_addr(0x1F64E, b, 16);
 	dump("TP B fwinfo", b, 16);
+
+	/* Same registers through bit-banged SPI: is the SE the problem? */
+	bb_dir(1);
+	gpio_mux(C_RST, 0, 0, 8, 1, 1);
+	delay_us(10000);
+	gpio_mux(C_RST, 0, 0, 8, 1, 0);
+	delay_us(60000);
+	bb_read(0x3F10D, b, 8);
+	dump("BB BOOT_RDY", b, 8);
+	bb_read(0x22D51, b, 8);
+	dump("BB HANDSHAKE", b, 8);
+	bb_read(0x1F64E, b, 8);
+	dump("BB CHIPID", b, 8);
+	bb_read(0x22D00, b, 8);
+	dump("BB EVBUF", b, 8);
 
 	if (nvt_get_fw_info(&info) == 0) {
 		con_hex2("TP fw", "ver=", info.fw_ver, "type=", info.fw_type);
