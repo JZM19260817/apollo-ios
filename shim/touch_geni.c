@@ -19,6 +19,8 @@
 #include "nvt.h"
 #include "rpmh.h"
 
+static void dump(const char *tag, const uint8_t *b, unsigned n);
+
 #define GCC		0x100000UL
 #define SE4		0x990000UL
 
@@ -328,6 +330,40 @@ bb_read(uint32_t addr, uint8_t *buf, unsigned n)
 	delay_us(2);
 }
 
+static void
+set_mode(unsigned m)
+{
+	wr(SE4 + SE_SPI_CPHA, (m & 1u) ? 1u : 0u);
+	wr(SE4 + SE_SPI_CPOL, (m & 2u) ? (1u << 2) : 0u);
+	delay_us(500);
+}
+
+/*
+ * Vote one named rail and see whether the controller starts answering.
+ * BOOT_RDY (0x3f10d) must become 0x01 when its supply is on.
+ */
+static void
+try_rail(const char *name)
+{
+	uint32_t addr = 0;
+	int found = rpmh_find(name, &addr);
+	uint8_t s8[8];
+
+	con_str("RAIL try", name);
+	if (found) {
+		con_hex2("RAIL miss", name, (uint32_t)found, "-", 0);
+		return;
+	}
+	con_hex2("RAIL addr", name, addr, "sending", 3000);
+	int sent = rpmh_send(addr, 3000);
+	con_hex2("RAIL sent", name, (uint32_t)sent, "-", 0);
+
+	delay_us(50000);
+	nvt_read_addr(0x3F10D, s8, 8);
+	con_hex2(name, "addr", addr, "send", (uint32_t)sent);
+	dump(name, s8, 8);
+}
+
 /* ---- probe ------------------------------------------------------------- */
 
 static void dump(const char *tag, const uint8_t *b, unsigned n)
@@ -371,6 +407,25 @@ void test_touch(void)
 		delay_us(5000);
 	}
 
+	/* Try every plausible supply: whichever makes BOOT_RDY read 01 is the rail. */
+	con_str("RAIL", "sweep begin");
+	try_rail("ldoc1");
+	try_rail("ldoc2");
+	try_rail("ldoc3");
+	try_rail("ldoc4");
+	try_rail("ldoc5");
+	try_rail("ldoc6");
+	try_rail("ldoc7");
+	try_rail("ldoc8");
+	try_rail("ldoc9");
+	try_rail("ldoc10");
+	try_rail("ldoc12");
+	try_rail("ldoa1");
+	try_rail("ldoa12");
+	try_rail("ldoa14");
+	try_rail("ldoa17");
+	try_rail("ldob");
+
 	/* Vendor probe order: reset high, eng-reset command, reset high, 10 ms. */
 	delay_us(5000);
 	nvt_write_addr(0x7FFF80, 0x5A);
@@ -400,6 +455,29 @@ void test_touch(void)
 	dump("TP FWINFO", b, 16);
 	nvt_read_addr(0x22D78, b, 16);
 	dump("TP FWINFO2", b, 16);
+	/* The hardware SPI mode is not in the dts: try all four. */
+	set_mode(0);
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP M0 BOOT", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP M0 CHIP", b, 8);
+	set_mode(1);
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP M1 BOOT", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP M1 CHIP", b, 8);
+	set_mode(2);
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP M2 BOOT", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP M2 CHIP", b, 8);
+	set_mode(3);
+	nvt_read_addr(0x3F10D, b, 8);
+	dump("TP M3 BOOT", b, 8);
+	nvt_read_addr(0x1F64E, b, 8);
+	dump("TP M3 CHIP", b, 8);
+	set_mode(0);
+
 	/*
 	 * The vendor leaves reset HIGH (released) and never touches a regulator.
 	 * Simply not driving the pin keeps whatever the bootloader set, which is
