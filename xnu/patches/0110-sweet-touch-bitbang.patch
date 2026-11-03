@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -650,6 +650,140 @@
+@@ -650,6 +650,145 @@
  	nvt_cs(0);
  }
  
@@ -117,10 +117,15 @@
 +static int
 +bb_poll(void)
 +{
++	static unsigned skip;
 +	uint8_t buf[BB_POINT_LEN];
 +	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
 +	uint32_t mask = 0;
 +
++	/* The loop runs at 10 ms; polling the bus every 100 ms is plenty. */
++	if ((skip++ % 10u) != 0) {
++		return 0;
++	}
 +	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
 +	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
 +		unsigned pos = 1u + 6u * i;
@@ -141,7 +146,7 @@
  static int
  nvt_poll(void)
  {
-@@ -838,13 +972,8 @@
+@@ -838,13 +977,8 @@
  		uint8_t fw[17];
  
  		printf("SWEET TOUCH: SE is SPI, bringing up the NT36675\n");
@@ -157,7 +162,7 @@
  		printf("SWEET TOUCH: nvt fw=%02x.%02x geom=%ux%u id=%02x%02x\n",
  		    fw[1], fw[2],
  		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
-@@ -855,7 +984,7 @@
+@@ -855,7 +989,7 @@
  		}
  		unsigned nvt_ticks = 0;
  		while (!st.dead) {
