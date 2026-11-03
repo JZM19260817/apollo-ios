@@ -1106,6 +1106,58 @@ What is left cannot be reached from software we control today:
    live SE window and PMIC state while Android drives the panel.
 2. Whether gpio 9/10 really are MOSI/MISO here. The DTS muxes 8/9/10 to qup4 but
    never says which is which; a logic analyser or a scope settles it.
+## SOLVED: the pin roles were wrong (2026-11-03 20:00)
+
+The dts for the touch only says
+
+```
+mux { pins = "gpio8", "gpio9", "gpio10"; function = "qup4"; };
+```
+
+so which of those carries CLK, MOSI and MISO had never been established - the
+code assumed CLK=8, MOSI=9, MISO=10. GENI assigns the roles in silicon, so the
+assumption could not be tested from the engine side, but a **bit-banged bus**
+can drive whichever pin it likes and sample whichever pin it likes.
+
+`shim/touch_bitbang.c` therefore ran four mappings, each doing the vendor
+sequence (reset low -> engine reset 0x5a to 0x7fff80 -> reset high -> 15 ms ->
+read 0x3f004). The screen showed:
+
+```
+MAP clk8  mo9  mi10  a FFFF  b FFFF  c FFFF  d FFFF
+MAP clk8  mo10 mi9   a FFFF  b FFFF  c FFFF  d FFFF
+MAP clk9  mo8  mi10  a FFFF  b FFFF  c FFFF  d FFFF
+MAP clk10 mo9  mi8   a 0E00  b 0072  c 6603  d 1000
+```
+
+That last line is the chip: **bytes 0E 00 00 72 66 03**, i.e. 0x036672 =
+NT36675, exactly what the working Android driver logs as
+`buf[1]=0x0E, buf[2]=0x00, buf[3]=0x00, buf[4]=0x72, buf[5]=0x66, buf[6]=0x03`.
+
+**The wiring is CLK=gpio10, MOSI=gpio9, MISO=gpio8, CS=gpio11.** Every earlier
+attempt was clocking the wrong pin, so MISO was never sampled.
+
+### Kernel transport
+
+Patch 0110 replaces the GENI transport in sweet_touch.c with the same bit-bang.
+Two things had to be fixed for it to even run:
+
+1. The patch was rejected in CI because 0104-0109 had rewritten the same block
+   repeatedly; the helpers compiled but the call never did. Those experimental
+   patches were dropped and 0110 regenerated against a tree rebuilt from the
+   pristine driver (reverse-applying 0093-0097 from the oldest snapshot, then
+   replaying 0093-0101 + 0108 in CI order).
+2. XNU's `delay()` counts microseconds, so the earlier `delay(10)` / `delay(60)`
+   around reset were 1000x shorter than the vendor's 10 ms.
+
+With 0110 flashed the kernel boots iOS but the userspace enters a reboot loop
+(CommCenter aborts repeatedly), so the bit-bang path still needs work - most
+likely the poll thread needs to stop hammering the bus, or one of the dropped
+patches was actually load-bearing for the SE interrupt setup.
+
+Next: keep the previous good patches, add only the bit-bang transport, and make
+the poll interval much longer (the shim read the event buffer once every 20 s
+without disturbing anything).
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
