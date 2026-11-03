@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -650,6 +650,152 @@
+@@ -650,6 +650,155 @@
  	nvt_cs(0);
  }
  
@@ -102,11 +102,14 @@
 +	touch_gpio(8, 0, 3, 6, false, false);	/* MISO, pull-up */
 +	touch_gpio(11, 0, 0, 6, true, true);	/* CS high */
 +
++	printf("SWEET TOUCH: bb pins muxed\n");
 +	touch_gpio(38, 0, 0, 8, true, false);	/* reset asserted */
 +	delay(2000);
++	printf("SWEET TOUCH: bb engine reset\n");
 +	bb_write(0x7fff80u, 0x5au);
 +	touch_gpio(38, 0, 0, 8, true, true);	/* release */
 +	delay(15000);
++	printf("SWEET TOUCH: bb reset released, reading id\n");
 +
 +	bb_read(0x3f004u, id, sizeof(id));
 +	printf("SWEET TOUCH: bb id %02x %02x %02x %02x %02x %02x %02x %02x\n",
@@ -153,7 +156,25 @@
  static int
  nvt_poll(void)
  {
-@@ -838,13 +984,11 @@
+@@ -800,7 +949,7 @@
+ static void
+ touch_thread(void *arg, wait_result_t result)
+ {
+-	unsigned delay_s = 45;
++	unsigned delay_s = 8;
+ 	(void)arg;
+ 	(void)result;
+ 	/*
+@@ -810,7 +959,7 @@
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
+-	printf("SWEET TOUCH: mapping GCC/TLMM/SE7\n");
++	printf("SWEET TOUCH: woke up, mapping MMIO\n");
+ 	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x60000);
+ 	st.gpio = ml_io_map(TOUCH_NORTH_PA, 0x5b000);
+ 	st.se = ml_io_map(TOUCH_SE_PA, 0x4000);
+@@ -838,13 +987,11 @@
  		uint8_t fw[17];
  
  		printf("SWEET TOUCH: SE is SPI, bringing up the NT36675\n");
@@ -172,7 +193,7 @@
  		printf("SWEET TOUCH: nvt fw=%02x.%02x geom=%ux%u id=%02x%02x\n",
  		    fw[1], fw[2],
  		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
-@@ -855,7 +999,7 @@
+@@ -855,7 +1002,7 @@
  		}
  		unsigned nvt_ticks = 0;
  		while (!st.dead) {
