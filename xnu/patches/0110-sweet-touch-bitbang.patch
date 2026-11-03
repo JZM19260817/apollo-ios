@@ -1,0 +1,160 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -725,6 +725,136 @@
+ 	return 0;
+ }
+ 
++/* ---- Novatek over a bit-banged bus (the configuration proven on hardware) --
++ *
++ * CLK gpio10, MOSI gpio9, MISO gpio8, CS gpio11. The dts only says
++ * pins = "gpio8", "gpio9", "gpio10" and never assigns the roles; this mapping
++ * is the one that reads back the chip id 0x036672.
++ */
++#define NVT_EVENT_PAGE		0x22d00u
++#define NVT_FWINFO_OFF		0x78u
++#define NVT_POINT_LEN		65u
++#define NVT_MAX_FINGERS		10u
++
++static void
++nvt_level(unsigned pin, int level)
++{
++	touch_gpio(pin, 0, 0, 6, true, level);
++}
++
++static int
++nvt_sample(void)
++{
++	return (int)(touch_rd(st.gpio, TOUCH_GPIO_IO(8)) & 1u);
++}
++
++static void
++nvt_cs(int selected)
++{
++	nvt_level(11, !selected);
++	delay(2);
++}
++
++static uint8_t
++nvt_xfer(uint8_t out)
++{
++	uint8_t in = 0;
++
++	for (int i = 7; i >= 0; i--) {
++		nvt_level(9, (out >> i) & 1);
++		delay(1);
++		nvt_level(10, 1);
++		delay(1);
++		in = (uint8_t)((in << 1) | (uint8_t)nvt_sample());
++		nvt_level(10, 0);
++		delay(1);
++	}
++	return in;
++}
++
++static void
++nvt_page(uint32_t addr)
++{
++	nvt_cs(1);
++	(void)nvt_xfer(0xffu);
++	(void)nvt_xfer((uint8_t)((addr >> 15) & 0xffu));
++	(void)nvt_xfer((uint8_t)((addr >> 7) & 0xffu));
++	nvt_cs(0);
++	delay(2);
++}
++
++static void
++nvt_read(uint32_t addr, uint8_t *buf, unsigned n)
++{
++	nvt_page(addr);
++	nvt_cs(1);
++	(void)nvt_xfer((uint8_t)(addr & 0x7fu));
++	(void)nvt_xfer(0u);
++	for (unsigned i = 0; i < n; i++) {
++		buf[i] = nvt_xfer(0u);
++	}
++	nvt_cs(0);
++	delay(2);
++}
++
++static void
++nvt_write(uint32_t addr, uint8_t value)
++{
++	nvt_page(addr);
++	nvt_cs(1);
++	(void)nvt_xfer((uint8_t)((addr & 0x7fu) | 0x80u));
++	(void)nvt_xfer(value);
++	nvt_cs(0);
++	delay(2);
++}
++
++/* Vendor order: engine reset while held in reset, then release, then 10 ms. */
++static int
++nvt_bringup(void)
++{
++	uint8_t id[8];
++
++	touch_gpio(10, 0, 0, 6, true, false);	/* CLK */
++	touch_gpio(9, 0, 0, 6, true, false);	/* MOSI */
++	touch_gpio(8, 0, 3, 6, false, false);	/* MISO, pull-up, input */
++	touch_gpio(11, 0, 0, 6, true, true);	/* CS high */
++
++	touch_gpio(38, 0, 0, 8, true, false);	/* reset asserted */
++	delay(2000);
++	nvt_write(0x7fff80u, 0x5au);
++	touch_gpio(38, 0, 0, 8, true, true);	/* release */
++	delay(15000);
++
++	nvt_read(0x3f004u, id, sizeof(id));
++	printf("SWEET TOUCH: bb id %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++	return id[3] == 0x72u && id[4] == 0x66u && id[5] == 0x03u;
++}
++
++static int
++nvt_poll_bb(void)
++{
++	uint8_t buf[NVT_POINT_LEN];
++	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++	uint32_t mask = 0;
++
++	nvt_read(NVT_EVENT_PAGE, buf, sizeof(buf));
++	for (unsigned i = 0; i < NVT_MAX_FINGERS && i < TOUCH_MAX; i++) {
++		unsigned pos = 1u + 6u * i;
++		uint8_t id = (uint8_t)(buf[pos] >> 3);
++		uint8_t status = (uint8_t)(buf[pos] & 7u);
++
++		if (id == 0 || id > NVT_MAX_FINGERS || (status != 1u && status != 2u)) {
++			continue;
++		}
++		x[i] = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
++		y[i] = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
++		mask |= 1u << i;
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
+ static int
+ nvt_poll(void)
+ {
+@@ -938,18 +1068,8 @@
+ 		uint8_t fw[17];
+ 
+ 		printf("SWEET TOUCH: SE is SPI, bringing up the NT36675\n");
+-		touch_gpio(8, 1, 0, 6, false, false);
+-		touch_gpio(9, 1, 0, 6, false, false);
+-		touch_gpio(10, 1, 0, 6, false, false);
+-		touch_gpio(11, 0, 0, 6, true, true);
+-		se_spi_setup();
+-		/* 19.2 MHz / 16 = 1.2 MHz: the reads looked like bit errors at 9.6. */
+-		touch_wr(st.se, 0x48u, (16u << 4) | 1u);
+-		nvt_reset();
+-		/* The shim's stable read followed this engine-reset command. */
+-		nvt_write(0x7fff80u, 0x5au);
+-		delay(15);
+-		(void)nvt_read_burst(NVT_EVENT_PAGE | NVT_FWINFO_OFF, fw, sizeof(fw));
++		(void)nvt_bringup();
++		nvt_read(NVT_EVENT_PAGE | NVT_FWINFO_OFF, fw, sizeof(fw));
+ 		printf("SWEET TOUCH: nvt fw=%02x.%02x geom=%ux%u id=%02x%02x\n",
+ 		    fw[1], fw[2],
+ 		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
