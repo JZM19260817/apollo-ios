@@ -1158,6 +1158,59 @@ patches was actually load-bearing for the SE interrupt setup.
 Next: keep the previous good patches, add only the bit-bang transport, and make
 the poll interval much longer (the shim read the event buffer once every 20 s
 without disturbing anything).
+## Touch: the panic was the SOUTH TLMM tile (2026-11-04 01:45)
+
+### What the diagnostics showed
+
+The bit-bang transport shipped in 0110 made iOS reboot. Prints added before and
+after the thread's start wait, and between the bring-up steps, narrowed it down
+without guessing:
+
+```
+SWEET TOUCH: starting in 8 s
+SWEET TOUCH: woke up, mapping MMIO
+...
+SWEET TOUCH: SE is SPI, bringing up the NT36675
+SWEET TOUCH: bb pins muxed
+                                        <- stops here
+```
+
+The next statement is `touch_gpio(38, ...)`. The driver maps one window,
+`TOUCH_NORTH_PA = 0x0f900000`, and computes every pin as `base + n * 0x1000`, so
+pin 38 was addressed at `0x0fb6000`. apollo's TLMM is 0x0f000000 with NORTH at
++0x900000 and SOUTH at +0x500000, so gpio38 (reset) and gpio39 (irq) live at
+`0x0f526000` / `0x0f527000`. `0x0fb6000` is not backed by hardware, the access
+raised an external abort, and the kernel panicked.
+
+### Fix
+
+Patch 0111 maps the SOUTH window as well and selects the base by pin number:
+
+```c
+vm_offset_t base = (pin >= 32u) ? st.gpio_south : st.gpio;
+```
+
+`st.gpio_south = ml_io_map(TOUCH_SOUTH_PA, 0x5b000)` and the null check covers
+it. The SPI pins (8..11) stay in NORTH.
+
+### State
+
+- `work/boot/shim-bb6.img` is the build with 0110 + 0111, downloaded and packed,
+  **not yet flashed**. CI run 41683996601, commit 7692889.
+- 0110 currently also carries the diagnostics (8 s start delay, step prints) and
+  bounded polling (three reads then stop, and no polling at all if the chip id
+  does not match).
+- The shim (`shim/touch_bitbang.c`) still holds the proven sequence: CLK gpio10,
+  MOSI gpio9, MISO gpio8, CS gpio11, reset low -> engine reset 0x5a to 0x7fff80
+  -> reset high -> 15 ms -> read 0x3f004 gives 0E 00 00 72 66 03.
+
+### Next
+
+Flash `shim-bb6.img`, boot, slide a finger, and pull the log. The expected line
+is `SWEET TOUCH: bb id 0e 00 00 72 66 03`; if the id matches, the thread starts
+polling the event buffer at 0x22d00 and `touch_report` should drive the panel.
+If it still reboots, the step prints will show whether the fault moved past
+`touch_gpio(38)`.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
