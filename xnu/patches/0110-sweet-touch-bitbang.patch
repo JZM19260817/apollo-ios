@@ -1,0 +1,168 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -650,6 +650,140 @@
+ 	nvt_cs(0);
+ }
+ 
++/* ---- Novatek over a bit-banged bus -------------------------------------
++ *
++ * Proven on this phone from the shim: CLK gpio10, MOSI gpio9, MISO gpio8,
++ * CS gpio11, all plain GPIO. The dts only lists pins = "gpio8","gpio9","gpio10"
++ * and never assigns roles; this mapping is the one that reads back the chip id
++ * 0E 00 00 72 66 03.
++ *
++ * XNU's delay() counts microseconds, which is why the previous delay(10) and
++ * delay(60) around reset were far shorter than the vendor's milliseconds.
++ */
++#define BB_EVENT_PAGE	0x22d00u
++#define BB_FWINFO_OFF	0x78u
++#define BB_POINT_LEN	65u
++#define BB_MAX_FINGERS	10u
++
++static void
++bb_level(unsigned pin, int level)
++{
++	touch_gpio(pin, 0, 0, 6, true, level);
++}
++
++static int
++bb_sample(void)
++{
++	return (int)(touch_rd(st.gpio, TOUCH_GPIO_IO(8)) & 1u);
++}
++
++static void
++bb_cs(int selected)
++{
++	bb_level(11, !selected);
++	delay(2);
++}
++
++static uint8_t
++bb_xfer(uint8_t out)
++{
++	uint8_t in = 0;
++
++	for (int i = 7; i >= 0; i--) {
++		bb_level(9, (out >> i) & 1);
++		delay(1);
++		bb_level(10, 1);
++		delay(1);
++		in = (uint8_t)((in << 1) | (uint8_t)bb_sample());
++		bb_level(10, 0);
++		delay(1);
++	}
++	return in;
++}
++
++static void
++bb_page(uint32_t addr)
++{
++	bb_cs(1);
++	(void)bb_xfer(0xffu);
++	(void)bb_xfer((uint8_t)((addr >> 15) & 0xffu));
++	(void)bb_xfer((uint8_t)((addr >> 7) & 0xffu));
++	bb_cs(0);
++	delay(2);
++}
++
++static void
++bb_read(uint32_t addr, uint8_t *buf, unsigned n)
++{
++	bb_page(addr);
++	bb_cs(1);
++	(void)bb_xfer((uint8_t)(addr & 0x7fu));
++	(void)bb_xfer(0u);
++	for (unsigned i = 0; i < n; i++) {
++		buf[i] = bb_xfer(0u);
++	}
++	bb_cs(0);
++	delay(2);
++}
++
++static void
++bb_write(uint32_t addr, uint8_t value)
++{
++	bb_page(addr);
++	bb_cs(1);
++	(void)bb_xfer((uint8_t)((addr & 0x7fu) | 0x80u));
++	(void)bb_xfer(value);
++	bb_cs(0);
++	delay(2);
++}
++
++/* Vendor order: engine reset while still in reset, then release, then 10 ms. */
++static int
++bb_bringup(void)
++{
++	uint8_t id[8];
++
++	touch_gpio(10, 0, 0, 6, true, false);	/* CLK */
++	touch_gpio(9, 0, 0, 6, true, false);	/* MOSI */
++	touch_gpio(8, 0, 3, 6, false, false);	/* MISO, pull-up */
++	touch_gpio(11, 0, 0, 6, true, true);	/* CS high */
++
++	touch_gpio(38, 0, 0, 8, true, false);	/* reset asserted */
++	delay(2000);
++	bb_write(0x7fff80u, 0x5au);
++	touch_gpio(38, 0, 0, 8, true, true);	/* release */
++	delay(15000);
++
++	bb_read(0x3f004u, id, sizeof(id));
++	printf("SWEET TOUCH: bb id %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++	return id[3] == 0x72u && id[4] == 0x66u && id[5] == 0x03u;
++}
++
++static int
++bb_poll(void)
++{
++	uint8_t buf[BB_POINT_LEN];
++	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++	uint32_t mask = 0;
++
++	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
++	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
++		unsigned pos = 1u + 6u * i;
++		uint8_t id = (uint8_t)(buf[pos] >> 3);
++		uint8_t status = (uint8_t)(buf[pos] & 7u);
++
++		if (id == 0 || id > BB_MAX_FINGERS || (status != 1u && status != 2u)) {
++			continue;
++		}
++		x[i] = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
++		y[i] = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
++		mask |= 1u << i;
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
+ static int
+ nvt_poll(void)
+ {
+@@ -838,13 +972,8 @@
+ 		uint8_t fw[17];
+ 
+ 		printf("SWEET TOUCH: SE is SPI, bringing up the NT36675\n");
+-		touch_gpio(8, 1, 0, 6, false, false);
+-		touch_gpio(9, 1, 0, 6, false, false);
+-		touch_gpio(10, 1, 0, 6, false, false);
+-		touch_gpio(11, 0, 0, 6, true, true);
+-		se_spi_setup();
+-		nvt_reset();
+-		nvt_read(NVT_EVENT_PAGE | NVT_FWINFO_OFF, fw, sizeof(fw));
++		(void)bb_bringup();
++		bb_read(BB_EVENT_PAGE | BB_FWINFO_OFF, fw, sizeof(fw));
+ 		printf("SWEET TOUCH: nvt fw=%02x.%02x geom=%ux%u id=%02x%02x\n",
+ 		    fw[1], fw[2],
+ 		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
+@@ -855,7 +984,7 @@
+ 		}
+ 		unsigned nvt_ticks = 0;
+ 		while (!st.dead) {
+-			(void)nvt_poll();
++			(void)bb_poll();
+ 			if ((++nvt_ticks % 600u) == 0) {
+ 				printf("SWEET TOUCH: nvt alive, active=%#x\n", st.active);
+ 			}
