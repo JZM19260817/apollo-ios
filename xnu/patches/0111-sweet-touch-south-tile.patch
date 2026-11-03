@@ -1,0 +1,56 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -25,6 +25,7 @@
+ #define TOUCH_SE_PA      0x00990000u	/* apollo: QUPv3 SE4 (sweet had SE7 at 0xa84000) */
+ #define TOUCH_GCC_PA     0x00100000u
+ #define TOUCH_NORTH_PA   0x0f900000u /* apollo TLMM 0x0f000000 + NORTH 0x900000 */
++#define TOUCH_SOUTH_PA   0x0f500000u /* apollo TLMM 0x0f000000 + SOUTH 0x500000 */
+ #define TOUCH_GCC_VOTE   0x52008u	/* SM8250 vote register (sweet used 0x5200c) */
+ /*
+  * SM8250: gcc_qupv3_wrap0_s4_clk_src cmd_rcgr. The branches are
+@@ -78,7 +79,7 @@
+ #define SE_PACK1        0x000ffefeu
+ 
+ static struct {
+-	vm_offset_t se, gcc, gpio;
++	vm_offset_t se, gcc, gpio, gpio_south;
+ 	bool started, dead, probing;
+ 	int kind, irq_hint;
+ 	uint32_t irq_status, irq_last, active;
+@@ -127,16 +128,21 @@
+ static void
+ touch_gpio(unsigned pin, unsigned mux, unsigned pull, unsigned drive, bool out, bool high)
+ {
++	/*
++	 * Pins 32 and up are in the SOUTH tile; the SPI pins (8..11) are in NORTH.
++	 * Using one base for both faults on an address no hardware answers.
++	 */
++	vm_offset_t base = (pin >= 32u) ? st.gpio_south : st.gpio;
+ 	uint32_t off = TOUCH_GPIO_CFG(pin);
+-	uint32_t cfg = touch_rd(st.gpio, off);
++	uint32_t cfg = touch_rd(base, off);
+ 	if (out) {
+ 		/* Set the desired latch before enabling output (reset is active low). */
+-		touch_wr(st.gpio, TOUCH_GPIO_IO(pin),
+-		    (touch_rd(st.gpio, TOUCH_GPIO_IO(pin)) & ~2u) | (high ? 2u : 0u));
++		touch_wr(base, TOUCH_GPIO_IO(pin),
++		    (touch_rd(base, TOUCH_GPIO_IO(pin)) & ~2u) | (high ? 2u : 0u));
+ 	}
+ 	cfg &= ~0x3ffu;
+ 	cfg |= (mux << 2) | pull | (drive << 6) | (out ? 0x200u : 0u);
+-	touch_wr(st.gpio, off, cfg);
++	touch_wr(base, off, cfg);
+ }
+ 
+ static bool
+@@ -962,8 +968,9 @@
+ 	printf("SWEET TOUCH: woke up, mapping MMIO\n");
+ 	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x60000);
+ 	st.gpio = ml_io_map(TOUCH_NORTH_PA, 0x5b000);
++	st.gpio_south = ml_io_map(TOUCH_SOUTH_PA, 0x5b000);
+ 	st.se = ml_io_map(TOUCH_SE_PA, 0x4000);
+-	if (!st.gcc || !st.gpio || !st.se) {
++	if (!st.gcc || !st.gpio || !st.gpio_south || !st.se) {
+ 		printf("SWEET TOUCH: MMIO mapping failed\n");
+ 		goto out;
+ 	}
