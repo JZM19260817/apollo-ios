@@ -1,0 +1,49 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -755,19 +755,37 @@
+ 	touch_gpio(11, 0, 0, 6, true, true);	/* CS high */
+ 
+ 	printf("SWEET TOUCH: bb pins muxed\n");
+-	touch_gpio(38, 0, 0, 8, true, false);	/* reset asserted */
++	/* A: reset pin only - let the controller boot its own firmware. */
++	touch_gpio(38, 0, 0, 8, true, false);
+ 	delay(2000);
+-	printf("SWEET TOUCH: bb engine reset\n");
+-	bb_write(0x7fff80u, 0x5au);
+-	touch_gpio(38, 0, 0, 8, true, true);	/* release */
+-	delay(15000);
+-	/* The id is a hardware register; the event buffer needs the firmware up. */
+-	delay(100000);
+-	printf("SWEET TOUCH: bb reset released, reading id\n");
++	touch_gpio(38, 0, 0, 8, true, true);
++	delay(300000);
++	bb_read(0x3f004u, id, sizeof(id));
++	printf("SWEET TOUCH: A id %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++	bb_read(BB_EVENT_PAGE | BB_FWINFO_OFF, id, sizeof(id));
++	printf("SWEET TOUCH: A fw %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++	bb_read(BB_EVENT_PAGE, id, sizeof(id));
++	printf("SWEET TOUCH: A ev %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
+ 
++	/* B: the vendor sequence with the engine reset. */
++	touch_gpio(38, 0, 0, 8, true, false);
++	delay(2000);
++	bb_write(0x7fff80u, 0x5au);
++	touch_gpio(38, 0, 0, 8, true, true);
++	delay(300000);
+ 	bb_read(0x3f004u, id, sizeof(id));
+-	printf("SWEET TOUCH: bb id %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	printf("SWEET TOUCH: B id %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++	bb_read(BB_EVENT_PAGE | BB_FWINFO_OFF, id, sizeof(id));
++	printf("SWEET TOUCH: B fw %02x %02x %02x %02x %02x %02x %02x %02x\n",
+ 	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++	bb_read(BB_EVENT_PAGE, id, sizeof(id));
++	printf("SWEET TOUCH: B ev %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
++
+ 	return id[3] == 0x72u && id[4] == 0x66u && id[5] == 0x03u;
+ }
+ 
