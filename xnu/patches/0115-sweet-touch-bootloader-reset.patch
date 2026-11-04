@@ -1,0 +1,16 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -755,6 +755,13 @@
+ 	touch_gpio(11, 0, 0, 6, true, true);	/* CS high */
+ 
+ 	printf("SWEET TOUCH: bb pins muxed\n");
++	/* Vendor nvt_bootloader_reset(): soft reset, then leave fast-read mode. */
++	bb_write(0x3f0feu, 0x69u);
++	delay(5000);
++	bb_write(0x3f310u, 0x00u);
++	delay(2000);
++	printf("SWEET TOUCH: bootloader reset done\n");
++
+ 	/* A: reset pin only - let the controller boot its own firmware. */
+ 	touch_gpio(38, 0, 0, 8, true, false);
+ 	delay(2000);
