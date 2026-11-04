@@ -1,0 +1,21 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -791,6 +791,18 @@
+ 		bb_read(0x3f004u, w, 8);
+ 		printf("SWEET TOUCH: id again %02x %02x %02x %02x %02x %02x %02x %02x\n",
+ 		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++
++		/*
++		 * The vendor waits for (handshake & 0xf0) == 0xa0 before trusting
++		 * anything in the event window. Watch it for a second.
++		 */
++		for (unsigned i = 0; i < 10; i++) {
++			uint8_t hs[2];
++
++			bb_read(0x22d51u, hs, 2);
++			printf("SWEET TOUCH: handshake %u = %02x %02x\n", i, hs[0], hs[1]);
++			delay(100000);
++		}
+ 	}
+ 
+ 	/* A: reset pin only - let the controller boot its own firmware. */
