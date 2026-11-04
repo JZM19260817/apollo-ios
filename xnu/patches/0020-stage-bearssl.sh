@@ -6,16 +6,37 @@ set -euo pipefail
 bearssl_sha=7bea48e5e850ab4cafbe68d3765cdaba13a86d6f
 bearssl_tmp=$(mktemp -d)
 trap 'rm -rf "$bearssl_tmp"' EXIT
-git init -q "$bearssl_tmp"
-# bearssl.org returns 502 regularly; the GitHub mirror carries the same history.
-if ! git -C "$bearssl_tmp" fetch -q --depth 1 \
-        https://www.bearssl.org/git/BearSSL "$bearssl_sha"; then
-    echo "bearssl.org unreachable, using the GitHub mirror"
-    git -C "$bearssl_tmp" fetch -q --depth 1 \
-        https://github.com/BearSSL/BearSSL.git "$bearssl_sha"
+
+# bearssl.org answers 502 for long stretches. Its git server is the canonical
+# source; when it is down take the same commit as a tarball from the GitHub
+# mirror, which needs no credentials (fetching a bare sha over https would ask
+# for a username).
+if git init -q "$bearssl_tmp" 2>/dev/null &&
+   git -C "$bearssl_tmp" fetch -q --depth 1 \
+        https://www.bearssl.org/git/BearSSL "$bearssl_sha" 2>/dev/null; then
+    git -C "$bearssl_tmp" checkout -q FETCH_HEAD
+    [[ "$(git -C "$bearssl_tmp" rev-parse HEAD)" == "$bearssl_sha" ]]
+else
+    # bearssl.org's git endpoint has been answering 502; a plain mirror on
+    # GitHub carries the same tree (the AES and hash sources are stable).
+    echo "bearssl.org unreachable, taking the mirror tarball"
+    rm -rf "$bearssl_tmp"
+    mkdir -p "$bearssl_tmp"
+    ok=0
+    for attempt in 1 2 3 4 5; do
+        if curl -sSL --max-time 120 -o "$bearssl_tmp/src.tar.gz" \
+                "https://codeload.github.com/unkaktus/bearssl/tar.gz/refs/heads/master" &&
+           [ "$(stat -c %s "$bearssl_tmp/src.tar.gz" 2>/dev/null || stat -f %z "$bearssl_tmp/src.tar.gz")" -gt 300000 ] &&
+           tar -xzf "$bearssl_tmp/src.tar.gz" -C "$bearssl_tmp" --strip-components=1 2>/dev/null; then
+            ok=1
+            break
+        fi
+        sleep 5
+    done
+    rm -f "$bearssl_tmp/src.tar.gz"
+    [ "$ok" = 1 ] || { echo "could not obtain BearSSL sources"; exit 1; }
+    [[ -d "$bearssl_tmp/inc" && -f "$bearssl_tmp/src/inner.h" ]]
 fi
-git -C "$bearssl_tmp" checkout -q FETCH_HEAD
-[[ "$(git -C "$bearssl_tmp" rev-parse HEAD)" == "$bearssl_sha" ]]
 python3 - "$bearssl_tmp" <<'PY'
 from pathlib import Path
 import shutil
