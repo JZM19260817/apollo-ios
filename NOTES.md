@@ -1339,6 +1339,36 @@ and a ten-sample poll of the handshake byte. Boot it, then read the log: the
 If the handshake stays out of 0xax, the next change is a firmware download: read the
 vendor blob from /vendor/firmware with the recovery's adb, embed it, and implement
 `nvt_update_firmware` over the same bit-banged bus.
+### 2026-11-05 02:00 - the write-back test polluted the chip mode
+
+The bb11 log is unambiguous:
+
+```
+3f310 before 00 00 00 00
+3f310 after  00 00 00 00
+3f310 wrote  b4 00 00 00      <- wrote 0x5a, read back 0xb4
+id again     1c 00 00 e4 cc 06  <- true id is 0e 00 00 72 66 03
+```
+
+Every byte is the true value shifted left by one bit: 0x0e->0x1c, 0x72->0xe4,
+0x66->0xcc, 0x03->0x06. The cause is the test itself: 0x3f310 is
+`SPI_RD_FAST_ADDR`, and the vendor only ever writes 0x00 there to leave fast-read
+mode. Writing 0x5a enabled a mode that shifts the read framing, so everything
+after that write came back shifted. Previous builds wrote only 0x00 and read the
+id correctly.
+
+Two useful conclusions:
+
+1. **Writes at high addresses do land** - the chip's behaviour changed the moment
+   0x5a was written, so MOSI, CS and the address phase are all sound.
+2. The handshake byte read as 0x57 in the shifted stream, so its true value is
+   not 0xa0-0xaf: the firmware still is not reporting itself ready.
+
+Rule for future tests: never write a non-zero value to 0x3f310.
+
+Next: read only the handshake byte (0x22d51) and the id, with no writes except
+the documented 0x00 to 0x3f310, and see whether the handshake settles at 0xax.
+If it does not, the controller needs its firmware loaded.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
