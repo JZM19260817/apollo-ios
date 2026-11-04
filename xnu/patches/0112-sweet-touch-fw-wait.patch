@@ -1,0 +1,20 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -761,6 +761,8 @@
+ 	bb_write(0x7fff80u, 0x5au);
+ 	touch_gpio(38, 0, 0, 8, true, true);	/* release */
+ 	delay(15000);
++	/* The id is a hardware register; the event buffer needs the firmware up. */
++	delay(100000);
+ 	printf("SWEET TOUCH: bb reset released, reading id\n");
+ 
+ 	bb_read(0x3f004u, id, sizeof(id));
+@@ -1004,7 +1006,7 @@
+ 		    ((unsigned)fw[5] << 8) | fw[6], ((unsigned)fw[7] << 8) | fw[8],
+ 		    fw[9], fw[10]);
+ 		if ((uint8_t)(fw[1] + fw[2]) != 0xffu) {
+-			printf("SWEET TOUCH: nvt fw info invalid, stopping\n");
++			printf("SWEET TOUCH: nvt fw info invalid, polling anyway\n");
+ 			goto out;
+ 		}
+ 		unsigned nvt_ticks = 0;
