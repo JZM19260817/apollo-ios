@@ -1,0 +1,10 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1007,7 +1007,6 @@
+ 		    fw[9], fw[10]);
+ 		if ((uint8_t)(fw[1] + fw[2]) != 0xffu) {
+ 			printf("SWEET TOUCH: nvt fw info invalid, polling anyway\n");
+-			goto out;
+ 		}
+ 		unsigned nvt_ticks = 0;
+ 		while (!st.dead) {
