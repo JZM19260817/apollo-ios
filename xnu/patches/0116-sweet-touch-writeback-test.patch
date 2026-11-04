@@ -1,0 +1,40 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -762,6 +762,37 @@
+ 	delay(2000);
+ 	printf("SWEET TOUCH: bootloader reset done\n");
+ 
++	{
++		uint8_t w[16];
++
++		/* does a write stick at a high address? */
++		bb_read(0x3f310u, w, 4);
++		printf("SWEET TOUCH: 3f310 before %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3]);
++		bb_write(0x3f310u, 0x00u);
++		bb_read(0x3f310u, w, 4);
++		printf("SWEET TOUCH: 3f310 after  %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3]);
++		bb_write(0x3f310u, 0x5au);
++		bb_read(0x3f310u, w, 4);
++		printf("SWEET TOUCH: 3f310 wrote  %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3]);
++
++		bb_read(0x22d78u, w, 16);
++		printf("SWEET TOUCH: 22d78 %02x %02x %02x %02x %02x %02x %02x %02x "
++		    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7],
++		    w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
++		bb_read(0x22d00u, w, 16);
++		printf("SWEET TOUCH: 22d00 %02x %02x %02x %02x %02x %02x %02x %02x "
++		    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7],
++		    w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
++		bb_read(0x3f004u, w, 8);
++		printf("SWEET TOUCH: id again %02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++	}
++
+ 	/* A: reset pin only - let the controller boot its own firmware. */
+ 	touch_gpio(38, 0, 0, 8, true, false);
+ 	delay(2000);
