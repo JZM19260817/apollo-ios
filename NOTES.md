@@ -1269,6 +1269,76 @@ neither, so the block really is not being read correctly.
 The diagnostic gate `if (!bb_bringup())` returns the result of the *last* read in
 the A/B block (the event buffer), so the log says "bb bringup failed; not
 polling" even though the id matched. Check the id from the first read instead.
+## 2026-11-04/05: the whole Novatek bring-up, what works and what is left
+
+### The decisive discoveries
+
+**The pin roles were wrong.** A bit-banged bus was the only way to find out, because
+GENI assigns CLK/MOSI/MISO in silicon. Four mappings tried, one answered:
+
+```
+MAP clk10 mo9 mi8  ->  0E 00 00 72 66 03   (0x036672, NT36675)
+```
+
+So the wiring is **CLK = gpio10, MOSI = gpio9, MISO = gpio8, CS = gpio11**. Every
+earlier attempt clocked the wrong pin, which is why the controller never answered
+even though the SE configuration, the rails and the timings were all correct.
+
+**gpio38/gpio39 live in the SOUTH TLMM tile.** The driver mapped only the NORTH
+window and computed every pin as base + n*0x1000, so the reset pin was addressed at
+0x0fb6000 - no hardware answers there and the access panicked the kernel right after
+"bb pins muxed". 0111 maps 0x0f500000 too and picks the base by pin number.
+
+**XNU's delay() counts microseconds.** The kernel's reset waits were 1000x shorter
+than the vendor's milliseconds.
+
+### The transport now works in the kernel
+
+```
+SWEET TOUCH: bb pins muxed
+SWEET TOUCH: bootloader reset done
+SWEET TOUCH: A id 0e 00 00 72 66 03 10 00     <- exact and repeatable
+SWEET TOUCH: A fw 32 2d f5 90 55 60 24 47     <- noise
+SWEET TOUCH: A ev cd 4a d7 1f b9 05 c9 46     <- noise, constant within a boot
+```
+
+### What the vendor does that has now been replicated
+
+- `nvt_eng_reset`: write 0x5a to 0x7fff80, wait 1 ms (A/B test showed it makes no
+  difference to the readings).
+- `nvt_bootloader_reset`: write 0x69 to 0x3f0fe, wait 5 ms, write 0 to 0x3f310 to
+  leave fast-read mode. Both registers are now written, no change.
+- Framing verified byte for byte against nt36xxx.h: `SPI_READ_MASK(a) = a & 0x7f`,
+  `SPI_WRITE_MASK(a) = a | 0x80`, `DUMMY_BYTES = 1`, page = {0xff, addr>>15,
+  (addr>>7)&0xff}, data copied from `rbuf+2`.
+- The NT36675 memory map in nt36xxx_mem_map.h confirms EVENT_BUF_ADDR = 0x22d00,
+  FWINFO = +0x78, HANDSHAKING = +0x51, RESET_COMPLETE = +0x60, BOOT_RDY = 0x3f10d.
+
+### The state machine we are missing
+
+`nvt_check_fw_status()` polls `EVENT_BUF_ADDR | 0x51` until `(byte & 0xf0) == 0xa0`,
+and `nvt_check_fw_reset_state()` polls `0x22d60` until the byte is between the
+requested state and 0xaf:
+
+```
+0xa0 IC reset   0xa1 ReK baseline   0xa2 baseline ready   0xa3 normal run
+```
+
+Both mean "the firmware is running". The event window only carries real data after
+that. Our reads there are noise, so the firmware is almost certainly not running and
+the controller needs its firmware loaded (`novatek_nt36675_j3s_fw01.bin`, named by
+the device tree and kept in /vendor/firmware on the Android side).
+
+### Where the next session starts
+
+`work/boot/shim-bb11.img` (run 41878534594, commit 295a8c2) adds the write-back test
+and a ten-sample poll of the handshake byte. Boot it, then read the log: the
+`3f310 before/after/wrote` lines show whether writes land at high addresses, and the
+`handshake N = xx` lines show whether the firmware ever reports 0xax.
+
+If the handshake stays out of 0xax, the next change is a firmware download: read the
+vendor blob from /vendor/firmware with the recovery's adb, embed it, and implement
+`nvt_update_firmware` over the same bit-banged bus.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
