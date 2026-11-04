@@ -1211,6 +1211,64 @@ is `SWEET TOUCH: bb id 0e 00 00 72 66 03`; if the id matches, the thread starts
 polling the event buffer at 0x22d00 and `touch_report` should drive the panel.
 If it still reboots, the step prints will show whether the fault moved past
 `touch_gpio(38)`.
+## Touch: the kernel reads the chip id, the event buffer still reads noise (2026-11-05 01:30)
+
+### What works now
+
+The bit-banged transport in the kernel prints
+
+```
+SWEET TOUCH: bb pins muxed
+SWEET TOUCH: bootloader reset done
+SWEET TOUCH: A id 0e 00 00 72 66 03 10 00
+SWEET TOUCH: A fw 32 2d f5 90 55 60 24 47
+SWEET TOUCH: A ev cd 4a d7 1f b9 05 c9 46
+```
+
+so the wiring (CLK gpio10, MOSI gpio9, MISO gpio8, CS gpio11), the GPIO
+direction handling, the South-tile mapping for reset gpio38 and the page/read
+framing all work: the chip id is exact and repeatable.
+
+### What does not
+
+The firmware block at 0x22d78 and the event buffer at 0x22d00 come back as noise
+that changes between boots (`b2 2d f2 ...`, `32 2d f5 ...`) and is constant
+within a boot.
+
+Everything the vendor does around those reads has now been implemented and made
+no difference:
+
+- the engine reset (write 0x5a to 0x7fff80) - A and B sequences gave byte for
+  byte identical results, so it is not the problem;
+- the bootloader reset (write 0x69 to 0x3f0fe, wait 5 ms) and disabling
+  fast-read (write 0 to 0x3f310), which the vendor does before every chip-id
+  read;
+- the exact framing, verified against nt36xxx.h: `SPI_READ_MASK(a) = a & 0x7f`,
+  `SPI_WRITE_MASK(a) = a | 0x80`, `DUMMY_BYTES = 1`, page = {0xff, addr>>15,
+  (addr>>7)&0xff}, and `CTP_SPI_READ` copies `rbuf+2` into the buffer.
+
+The firmware check the vendor uses is `buf[1] + buf[2] == 0xff` with
+`abs_x_max = (buf[5]<<8)|buf[6]` and `abs_y_max = (buf[7]<<8)|buf[8]`; ours gives
+neither, so the block really is not being read correctly.
+
+### Remaining hypotheses
+
+1. The controller is still in a mode where only the trim/id window answers, and
+   the mode exit is not the 0x3f310 write but a firmware download
+   (`nvt_update_firmware` in the vendor driver). The firmware file the device
+   tree names is `novatek_nt36675_j3s_fw01.bin`, which lives in
+   `/vendor/firmware` on the Android side.
+2. The read of a multi-byte block past the first byte is broken in a way the
+   6-byte chip id does not expose - worth reading 32 bytes once and looking at
+   how many leading bytes are plausible.
+3. Something the Android kernel sets up before the driver probes (the panel
+   driver, or a bootloader hand-off) that leaves the controller running.
+
+### Note for the next build
+
+The diagnostic gate `if (!bb_bringup())` returns the result of the *last* read in
+the A/B block (the event buffer), so the log says "bb bringup failed; not
+polling" even though the id matched. Check the id from the first read instead.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
