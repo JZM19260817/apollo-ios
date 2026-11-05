@@ -1,0 +1,35 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -763,6 +763,32 @@
+ 	printf("SWEET TOUCH: bootloader reset done\n");
+ 
+ 	{
++		uint8_t hs[2];
++
++		/* V1: leave reset as the bootloader left it. */
++		bb_read(0x22d51u, hs, 2);
++		printf("SWEET TOUCH: V1 noreset   handshake %02x\n", hs[0]);
++
++		/* V2: 10 ms low, release, 200 ms. */
++		touch_gpio(38, 0, 0, 8, true, false);
++		delay(10000);
++		touch_gpio(38, 0, 0, 8, true, true);
++		delay(200000);
++		bb_read(0x22d51u, hs, 2);
++		printf("SWEET TOUCH: V2 10/200   handshake %02x rst_cfg %08x io %08x\n",
++		    hs[0], touch_rd(st.gpio_south, TOUCH_GPIO_CFG(38)),
++		    touch_rd(st.gpio_south, TOUCH_GPIO_IO(38)));
++
++		/* V3: 100 ms low, release, 500 ms. */
++		touch_gpio(38, 0, 0, 8, true, false);
++		delay(100000);
++		touch_gpio(38, 0, 0, 8, true, true);
++		delay(500000);
++		bb_read(0x22d51u, hs, 2);
++		printf("SWEET TOUCH: V3 100/500  handshake %02x\n", hs[0]);
++	}
++
++	{
+ 		uint8_t w[16];
+ 
+ 		/* read-only from here on */
