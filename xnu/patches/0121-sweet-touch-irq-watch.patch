@@ -1,0 +1,38 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -763,6 +763,35 @@
+ 	printf("SWEET TOUCH: bootloader reset done\n");
+ 
+ 	{
++		/*
++		 * Watch the interrupt line for 15 s. Android drives gpio39 as an
++		 * input with a pull-down and serves the event buffer from the IRQ
++		 * worker, so pulses here mean the controller is scanning.
++		 */
++		unsigned lows = 0, edges = 0;
++		int prev;
++
++		touch_gpio(39, 0, 1, 6, false, false);	/* input, pull-down */
++		delay(1000);
++		prev = (int)(touch_rd(st.gpio_south, TOUCH_GPIO_IO(39)) & 1u);
++		printf("SWEET TOUCH: irq watch start, idle=%d\n", prev);
++		for (unsigned i = 0; i < 15000u; i++) {
++			int now = (int)(touch_rd(st.gpio_south, TOUCH_GPIO_IO(39)) & 1u);
++
++			if (now != prev) {
++				edges++;
++				prev = now;
++			}
++			if (!now) {
++				lows++;
++			}
++			delay(1000);
++		}
++		printf("SWEET TOUCH: irq watch done lows=%u edges=%u level=%d\n",
++		    lows, edges, prev);
++	}
++
++	{
+ 		uint8_t w[16];
+ 
+ 		/* read-only from here on */
