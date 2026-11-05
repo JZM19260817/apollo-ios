@@ -1369,6 +1369,50 @@ Rule for future tests: never write a non-zero value to 0x3f310.
 Next: read only the handshake byte (0x22d51) and the id, with no writes except
 the documented 0x00 to 0x3f310, and see whether the handshake settles at 0xax.
 If it does not, the controller needs its firmware loaded.
+## 2026-11-05 night: firmware state machine measured, clock is not the cause
+
+### Clean measurements (bb13, read-only, no stray writes)
+
+```
+ID        0e 00 00 72 66 03 10 00      correct
+ID again  0e 00 00 72 66 03 10 00      correct after everything else
+status*   handshake 0x2b  reset 0x30   identical across eight samples and boots
+fwinfo    b2 2d ?? ?? ?? 00 ?? ??      different every boot
+event     c? ?? ?? ?? b3 05 48 46 ...  partly stable, partly changing
+```
+
+Two readings are perfectly deterministic across boots (0x2b, 0x30) and two are
+not, so the bus is reading real registers and the controller really is parked in
+a state where the handshake is not 0xa0-0xaf. That is the vendor's "firmware is
+running" indicator, so **the firmware is not running**.
+
+### What was ruled out today
+
+- Clock speed: 0119 pulses CLK 20000 times (~1-2 MHz) after reset and waits 50 ms.
+  Handshake still 0x2b, unchanged. So a slow SPI clock is not what stalls the MCU.
+- The 0x5a write to SPI_RD_FAST_ADDR (0x3f310) shifts every later read one bit
+  left; that was a mistake in bb11's test, not a property of the chip. Only ever
+  write 0x00 there.
+- The engine reset and the bootloader reset make no difference to any reading.
+- Writes do land: writing 0x5a to 0x3f310 immediately changed the framing.
+
+### Where the firmware could come from
+
+The device tree names `novatek_nt36675_j3s_fw01.bin`. It is not in the recovery's
+/vendor (dynamic partitions are not mounted there), so extracting it needs the
+super partition unpacked on the host: `lpunpack` the vendor image from
+`work/` and read `/vendor/firmware/novatek_nt36675_j3s_fw01.bin`.
+
+Once in hand, the vendor's `nvt_update_firmware` writes it through
+`nvt_write_addr` in chunks with the chip held in its bootloader, then issues the
+bootloader reset. Our bit-bang already implements exactly those two primitives;
+what is missing is the chunking, the CRC and the BOOT_RDY (0x3f10d) handshake.
+
+### Alternative worth one test first
+
+The chip may want the **IRQ line** in a particular state during boot: the active
+pinctrl config sets gpio39 to input with a pull-down, and we never configure it.
+Cheap to try before building a firmware loader.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
