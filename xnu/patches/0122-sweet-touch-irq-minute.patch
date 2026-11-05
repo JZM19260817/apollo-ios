@@ -1,0 +1,22 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -806,7 +806,7 @@
+ 		delay(1000);
+ 		prev = (int)(touch_rd(st.gpio_south, TOUCH_GPIO_IO(39)) & 1u);
+ 		printf("SWEET TOUCH: irq watch start, idle=%d\n", prev);
+-		for (unsigned i = 0; i < 15000u; i++) {
++		for (unsigned i = 0; i < 60000u; i++) {
+ 			int now = (int)(touch_rd(st.gpio_south, TOUCH_GPIO_IO(39)) & 1u);
+ 
+ 			if (now != prev) {
+@@ -816,6 +816,10 @@
+ 			if (!now) {
+ 				lows++;
+ 			}
++			if ((i % 5000u) == 0u) {
++				printf("SWEET TOUCH: irq t=%us lows=%u edges=%u\n",
++				    i / 1000u, lows, edges);
++			}
+ 			delay(1000);
+ 		}
+ 		printf("SWEET TOUCH: irq watch done lows=%u edges=%u level=%d\n",
