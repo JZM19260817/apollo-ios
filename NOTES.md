@@ -1525,6 +1525,60 @@ Next: either locate `novatek_nt36675_j3s_fw01.bin` in the remaining partitions
 implement `nvt_update_firmware` over the bit-banged bus: page writes of
 `RW_FLASH_DATA_ADDR` (0x24002) with the boot-ready handshake at
 `BOOT_RDY_ADDR` (0x3f10d), followed by `nvt_check_fw_reset_state`.
+## 2026-11-06 01:45 - the firmware upload runs and changes the controller state
+
+### The upload itself works
+
+`shim/touch_fwu.c` now implements the vendor's `nvt_download_firmware_hw_crc()`
+over the bit-banged bus, with the real blob (139264 bytes, converted from
+`novatek_nt36675_j3s_fw01.bin.ihex` in the Project-Zephyrus sm8250 tree):
+
+```
+FWU    upload NT36675 firmware
+FWU    in bootloader
+header size 0x100
+ILM    sram 0x0      size 0x13C3F
+DLM    sram 0x27140  size 0x4377
+FWU    all sections written
+crc    ilm 0xFF8524C4  dlm 0xFF72B78
+FWU    crc bank set        (ILM/DLM descriptor, length and golden checksum)
+FWU    crc enabled         (BLD_CRC_EN, clear reset status, HOST_CMD 0xAE)
+boot ready before 00
+boot ready after  01
+reset state       0xFE     <- was 0x00 before the CRC step
+id                0xFEFE FEFE   <- the chip id no longer answers
+```
+
+Three things are new and all are progress:
+
+1. the header parses exactly (size 0x100, ILM at 0, DLM at 0x27140);
+2. the boot-ready bit sticks (00 -> 01), so the bootloader accepts the write;
+3. **the reset-state byte moved off 0x00 and the chip id stopped answering** -
+   the controller left the state it had been parked in for days. That is the
+   first time any of our writes changed its behaviour.
+
+### What 0xFE probably means
+
+The vendor waits for the reset state to reach `RESET_STATE_INIT` (0xa0). 0xfe is
+outside that range, and the id register now reads 0xfefe, which looks like a
+floating bus - the controller is no longer in the mode where that register is
+mapped. Likely candidates, in order of plausibility:
+
+1. the image is running but the bus timing no longer matches (the firmware may
+   expect the 15 MHz the vendor uses, not our ~333 kHz bit-bang);
+2. the bootloader rejected the image (bad golden checksum) and parked;
+3. the boot needs more than BOOT_RDY - the vendor may also poll `BOOT_RDY_ADDR`
+   (0x3f10d) until it reads 1 before/while setting the bit.
+
+### Next
+
+- Re-read the state a few seconds later: if it settles at 0xa0 eventually, only
+  the wait was missing.
+- Compare our checksum with the vendor's expectation: `CheckSum()` sums len+1
+  bytes, adds len and negates; we implement that, but it is worth printing the
+  first bytes of each section alongside the sum to confirm the offsets.
+- If the bus timing is the issue, the GENI engine at the vendor's 15 MHz becomes
+  worth revisiting now that the pins are known.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
