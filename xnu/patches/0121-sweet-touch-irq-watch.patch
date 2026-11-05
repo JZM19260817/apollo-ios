@@ -1,9 +1,10 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -763,6 +763,35 @@
- 	printf("SWEET TOUCH: bootloader reset done\n");
- 
- 	{
+@@ -793,6 +793,33 @@
+ 		bb_read(0x3f004u, w, 8);
+ 		printf("SWEET TOUCH: ID again %02x %02x %02x %02x %02x %02x %02x %02x\n",
+ 		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++
 +		/*
 +		 * Watch the interrupt line for 15 s. Android drives gpio39 as an
 +		 * input with a pull-down and serves the event buffer from the IRQ
@@ -30,9 +31,6 @@
 +		}
 +		printf("SWEET TOUCH: irq watch done lows=%u edges=%u level=%d\n",
 +		    lows, edges, prev);
-+	}
-+
-+	{
- 		uint8_t w[16];
+ 	}
  
- 		/* read-only from here on */
+ 	/* A: reset pin only - let the controller boot its own firmware. */
