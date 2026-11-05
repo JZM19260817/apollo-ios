@@ -1,0 +1,42 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -762,6 +762,39 @@
+ 	delay(2000);
+ 	printf("SWEET TOUCH: bootloader reset done\n");
+ 
++	{
++		uint8_t w[16];
++
++		/* read-only from here on */
++		bb_read(0x3f004u, w, 8);
++		printf("SWEET TOUCH: ID %02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++
++		for (unsigned i = 0; i < 8; i++) {
++			uint8_t hs[2], rs[2];
++
++			bb_read(0x22d51u, hs, 2);
++			bb_read(0x22d60u, rs, 2);
++			printf("SWEET TOUCH: status %u handshake %02x reset %02x\n",
++			    i, hs[0], rs[0]);
++			delay(20000);
++		}
++
++		bb_read(0x22d78u, w, 16);
++		printf("SWEET TOUCH: fwinfo %02x %02x %02x %02x %02x %02x %02x %02x "
++		    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7],
++		    w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
++		bb_read(0x22d00u, w, 16);
++		printf("SWEET TOUCH: event  %02x %02x %02x %02x %02x %02x %02x %02x "
++		    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7],
++		    w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
++		bb_read(0x3f004u, w, 8);
++		printf("SWEET TOUCH: ID again %02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++	}
++
+ 	/* A: reset pin only - let the controller boot its own firmware. */
+ 	touch_gpio(38, 0, 0, 8, true, false);
+ 	delay(2000);
