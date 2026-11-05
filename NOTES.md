@@ -1413,6 +1413,58 @@ what is missing is the chunking, the CRC and the BOOT_RDY (0x3f10d) handshake.
 The chip may want the **IRQ line** in a particular state during boot: the active
 pinctrl config sets gpio39 to input with a pull-down, and we never configure it.
 Cheap to try before building a firmware loader.
+## 2026-11-06 00:15 - the chip state is normal, the earlier reading was wrong
+
+### The as-left-by-the-bootloader test
+
+`shim/touch_asis.c` maps only the four SPI pins and reads the controller with no
+reset, no engine reset and no writes. The screen showed:
+
+```
+ASIS  state as the bootloader left it
+id         000E00 000072 / 0006603 00001000    -> 0e 00 00 72 66 03
+handshake  0x2b
+reset state 0x30
+fwinfo     0x0b22d 0x0e19a
+```
+
+Identical to the values measured after our full bring-up. So our initialisation
+is not what puts the controller in this state - it is already there when the
+kernel starts.
+
+### Android sees the same thing
+
+The working Android kernel's dmesg contains
+
+```
+nvt_get_fw_info 755: FW type is 0x01, fw_ver=17
+```
+
+and line 755 in nt36xxx.c is the branch taken when `buf[1] + buf[2] != 0xff`,
+i.e. **Android's firmware-info read is garbage too** and the driver falls back to
+defaults. Android also never calls `nvt_check_fw_reset_state()` during probe, so
+it never validates the handshake byte either.
+
+Conclusion: `handshake = 0x2b` and an unreadable firmware block are the normal
+state of this controller, not a fault. The earlier "firmware is not running"
+theory was wrong, and hunting for a firmware blob was the wrong path - there is
+none in /vendor anyway (the vendor image is 707 MiB EROFS at 0x444ba000 inside
+super and holds no Novatek file).
+
+### What is actually different
+
+The id reads identically on both sides, so the transport is right. What Android
+has and we do not is the **IRQ path**: it configures gpio39 as an input with a
+pull-down (`ts_int_active` in the dts), requests IRQ 520 and only reads the event
+buffer in the interrupt worker. Our shim and kernel never touch gpio39 and read
+0x22d00 blind.
+
+Next:
+1. Configure gpio39 as input with pull-down exactly as `ts_int_active` says and
+   watch it while touching - if it pulses, the controller is scanning and the
+   event read just needs the right framing.
+2. If it never pulses, look at what enables scanning: the vendor's resume path
+   and `EVENT_MAP_HOST_CMD` (0x50) writes.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
