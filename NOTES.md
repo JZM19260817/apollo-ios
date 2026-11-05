@@ -1465,6 +1465,66 @@ Next:
    event read just needs the right framing.
 2. If it never pulses, look at what enables scanning: the vendor's resume path
    and `EVENT_MAP_HOST_CMD` (0x50) writes.
+## 2026-11-06 01:30 - the missing step is the firmware upload on resume
+
+### The interrupt line never moves
+
+`0122` sampled gpio39 once per millisecond for 60 s while a finger was swiped the
+whole time:
+
+```
+irq watch start, idle=0
+irq t=0s  lows=1     edges=0
+irq t=5s  lows=5001  edges=0
+...
+irq watch done lows=60000 edges=0 level=0
+```
+
+Android requests IRQ 520 with trigger type 1 (`int_trigger_type=1` in its dmesg,
+i.e. rising edge), so the line idles low and must pulse high on a real touch. It
+never did: the controller is not scanning.
+
+### Why: the vendor uploads firmware on every resume
+
+`nvt_ts_resume()` - called at the end of `nvt_ts_probe`, line 2641 - does:
+
+```c
+ret = nvt_update_firmware(ts->fw_name);      /* novatek_nt36675_j3s_fw01.bin */
+nvt_check_fw_reset_state(RESET_STATE_REK);   /* waits for the baseline         */
+nvt_irq_enable(true);
+```
+
+So the controller is not expected to boot a firmware out of its own flash: the
+driver **downloads the image into it** and then waits for the reset state byte to
+reach `RESET_STATE_REK` (0xa1-0xa3). That is exactly the step we never
+implemented, and it explains every reading: the chip id comes from hardware, the
+handshake/reset bytes stay at their boot values (0x2b / 0x30) and the event
+window never fills in.
+
+Android's dmesg confirms the upload happens and succeeds:
+
+```
+nvt_update_firmware 1118: update_firmware_request failed. (-2)
+update_firmware_request 354: filename is novatek_nt36675_j3s_fw01.bin
+nvt_update_firmware 1141: Update firmware success! <67146 us>
+```
+
+### Where the blob is (still open)
+
+- `/vendor/firmware` (707 MiB EROFS extracted in full) has 42 files, none Novatek;
+  the only `novatek_nt36675_j3s_mp01.bin` string in the image is inside the driver
+  module reference, not a file entry.
+- `/odm` (1 MiB EROFS) and `/vendor/lib/modules` hold nothing relevant, and the
+  touch driver is built into the kernel rather than shipped as a module.
+- The system partition pull landed on a non-filesystem header, so the extent
+  offset for `system` in the super metadata needs re-checking before searching it
+  again.
+
+Next: either locate `novatek_nt36675_j3s_fw01.bin` in the remaining partitions
+(re-check the system extent first), or pull it from a stock ROM for apollo, then
+implement `nvt_update_firmware` over the bit-banged bus: page writes of
+`RW_FLASH_DATA_ADDR` (0x24002) with the boot-ready handshake at
+`BOOT_RDY_ADDR` (0x3f10d), followed by `nvt_check_fw_reset_state`.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
