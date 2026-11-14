@@ -1,0 +1,202 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -743,58 +743,162 @@
+ 	delay(2);
+ }
+ 
+-/* Vendor order: engine reset while still in reset, then release, then 10 ms. */
++
++#include "nvt_fw_array.h"
++
++/* ---- firmware upload ---------------------------------------------------
++ *
++ * Bit-banged write of n bytes: page select, then the offset byte with the
++ * write opcode in bit 7 (CTP_SPI_WRITE applies SPI_WRITE_MASK) followed by the
++ * payload. Missing that bit was what kept the controller's RAM untouched.
++ */
++static void
++bb_write_bytes(uint32_t addr, const unsigned char *d, unsigned n)
++{
++	bb_page(addr);
++	bb_cs(1);
++	(void)bb_xfer((uint8_t)((addr & 0x7fu) | 0x80u));
++	for (unsigned i = 0; i < n; i++) {
++		(void)bb_xfer(d[i]);
++	}
++	bb_cs(0);
++	delay(2);
++}
++
++static uint32_t
++nvt_w32(const unsigned char *p)
++{
++	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++	    ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++/* One ILM/DLM bank: destination, length and golden checksum. */
++static void
++nvt_bld_crc_bank(uint32_t des, uint32_t sram, uint32_t length_addr,
++    uint32_t size, uint32_t gsum, uint32_t crc)
++{
++	uint8_t b[4];
++
++	b[0] = (uint8_t)sram;
++	b[1] = (uint8_t)(sram >> 8);
++	b[2] = (uint8_t)(sram >> 16);
++	bb_write_bytes(des, b, 3);
++
++	b[0] = (uint8_t)size;
++	b[1] = (uint8_t)(size >> 8);
++	b[2] = (uint8_t)((size >> 16) & 1u);
++	bb_write_bytes(length_addr, b, 3);
++
++	b[0] = (uint8_t)crc;
++	b[1] = (uint8_t)(crc >> 8);
++	b[2] = (uint8_t)(crc >> 16);
++	b[3] = (uint8_t)(crc >> 24);
++	bb_write_bytes(gsum, b, 4);
++}
++
+ static int
+-bb_bringup(void)
++bb_upload_firmware(void);
++
++/* Upload the firmware and wait until the controller reports normal run. */
++static int
++bb_upload_firmware(void)
+ {
+-	uint8_t id[8];
++	uint8_t b[8], st[2];
++	uint32_t sec_bin[4], sec_sram[4], sec_size[4];
++	unsigned nsec = 2, i;
++
++	for (i = 0; i < 2; i++) {
++		sec_bin[i] = nvt_w32(&nvt_fw[0 + i * 12]);
++		sec_sram[i] = nvt_w32(&nvt_fw[4 + i * 12]);
++		sec_size[i] = nvt_w32(&nvt_fw[8 + i * 12]);
++	}
++	/* info sections follow at 0x30; only non-zero ones are written, and the
++	 * 0xff-byte one at 0xf0 (SRAM 0x27040) is required for the boot. */
++	for (i = 0; i < 13; i++) {
++		uint32_t base = 0x30u + i * 16u;
++		uint32_t size = nvt_w32(&nvt_fw[base + 4]);
++
++		if (size != 0u && nsec < 4u) {
++			sec_sram[nsec] = nvt_w32(&nvt_fw[base]);
++			sec_size[nsec] = size;
++			sec_bin[nsec] = nvt_w32(&nvt_fw[base + 8]);
++			nsec++;
++		}
++	}
++
++	/* nvt_set_bld_hw_crc(): banks first, then the payload. */
++	nvt_bld_crc_bank(0x3f128u, sec_sram[0], 0x3f118u, sec_size[0],
++	    0x3f100u, nvt_w32(&nvt_fw[0x18]));
++	nvt_bld_crc_bank(0x3f12cu, sec_sram[1], 0x3f130u, sec_size[1],
++	    0x3f104u, nvt_w32(&nvt_fw[0x1c]));
++
++	for (i = 0; i < nsec; i++) {
++		uint32_t size = sec_size[i] + 1u;
++		uint32_t off = 0;
++
++		while (off < size) {
++			unsigned n = (size - off) > 1024u ? 1024u : (size - off);
++
++			bb_write_bytes(sec_sram[i] + off, &nvt_fw[sec_bin[i] + off], n);
++			off += n;
++		}
++	}
++
++	/* nvt_bld_crc_enable(): read-modify-write, bit 7. */
++	bb_read(0x3f30eu, b, 2);
++	bb_write(0x3f30eu, (uint8_t)(b[0] | 0x80u));
++
++	/* nvt_fw_crc_enable() + nvt_boot_ready(). */
++	bb_write(0x22d60u, 0x00u);
++	bb_write(0x22d50u, 0xAEu);
++	bb_write(0x3f10du, 0x01u);
++	delay(5000);
++
++	for (i = 0; i < 3000u; i++) {
++		bb_read(0x22d60u, st, 2);
++		if (st[0] >= 0xA3u && st[0] <= 0xAFu) {
++			break;
++		}
++		delay(10000);
++	}
++	printf("SWEET TOUCH: upload state %02x after %u ms\n", st[0], i * 10u);
++	return st[0] >= 0xA0u;
++}
+ 
++/* Vendor nvt_bootloader_reset() + the upload; no hardware or engine reset. */
++static int
++bb_bringup(void)
++{
+ 	touch_gpio(10, 0, 0, 6, true, false);	/* CLK */
+ 	touch_gpio(9, 0, 0, 6, true, false);	/* MOSI */
+-	touch_gpio(8, 0, 3, 6, false, false);	/* MISO, pull-up */
++	touch_gpio(8, 0, 3, 6, false, false);	/* MISO */
+ 	touch_gpio(11, 0, 0, 6, true, true);	/* CS high */
+ 
+-	printf("SWEET TOUCH: bb pins muxed\n");
+-	touch_gpio(38, 0, 0, 8, true, false);	/* reset asserted */
++	bb_write(0x3f0feu, 0x69u);
++	delay(5000);
++	bb_write(0x3f310u, 0x00u);
+ 	delay(2000);
+-	printf("SWEET TOUCH: bb engine reset\n");
+-	bb_write(0x7fff80u, 0x5au);
+-	touch_gpio(38, 0, 0, 8, true, true);	/* release */
+-	delay(15000);
+-	printf("SWEET TOUCH: bb reset released, reading id\n");
+-
+-	bb_read(0x3f004u, id, sizeof(id));
+-	printf("SWEET TOUCH: bb id %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-	    id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
+-	return id[3] == 0x72u && id[4] == 0x66u && id[5] == 0x03u;
++
++	return bb_upload_firmware();
+ }
+ 
+ static int
+ bb_poll(void)
+ {
+-	static unsigned calls;
+ 	uint8_t buf[BB_POINT_LEN];
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0;
+ 
+-	/*
+-	 * Diagnostic build: read the event buffer a few times so the transport is
+-	 * exercised, then stop touching the bus entirely. If the system stays up
+-	 * with this, the transport is fine and the trouble is sustained polling.
+-	 */
+-	if (calls >= 3u) {
+-		return 0;
+-	}
+-	calls++;
+ 	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
+-	printf("SWEET TOUCH: bb poll %u: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-	    calls, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+ 	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
+ 		unsigned pos = 1u + 6u * i;
+ 		uint8_t id = (uint8_t)(buf[pos] >> 3);
+ 		uint8_t status = (uint8_t)(buf[pos] & 7u);
+ 
+-		if (id == 0 || id > BB_MAX_FINGERS || (status != 1u && status != 2u)) {
++		if (id == 0 || id > BB_MAX_FINGERS) {
++			continue;
++		}
++		if (status != 1u && status != 2u && status != 0u) {
+ 			continue;
+ 		}
+ 		x[i] = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
+@@ -805,6 +909,7 @@
+ 	return 0;
+ }
+ 
++
+ static int
+ nvt_poll(void)
+ {
