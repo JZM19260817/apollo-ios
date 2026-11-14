@@ -1,0 +1,55 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -894,33 +894,45 @@
+ 		unsigned pos = 1u + 6u * i;
+ 		uint8_t id = (uint8_t)(buf[pos] >> 3);
+ 		uint8_t status = (uint8_t)(buf[pos] & 7u);
++		unsigned slot;
+ 		int rx, ry;
+ 
+ 		if (id == 0 || id > BB_MAX_FINGERS) {
+ 			continue;
+ 		}
+-		if (status != 1u && status != 2u && status != 0u) {
++		/* 1 = down, 2 = moving; anything else means no contact. */
++		if (status != 1u && status != 2u) {
++			continue;
++		}
++		slot = id - 1u;
++		if (slot >= TOUCH_MAX) {
+ 			continue;
+ 		}
+ 		/*
+ 		 * The chip's first coordinate tracks the screen's vertical axis and
+-		 * its second the horizontal one: a horizontal swipe moves the pointer
+-		 * vertically unless they are swapped.
++		 * its second the horizontal one.
+ 		 */
+ 		rx = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
+ 		ry = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
+-		x[i] = ry;
+-		y[i] = rx;
+-		mask |= 1u << i;
++		x[slot] = ry;
++		y[slot] = rx;
++		mask |= 1u << slot;
+ 	}
+ 	touch_report(mask, x, y);
+ 
+-	/* What range does the controller actually report? */
+ 	if (mask) {
+ 		static int min_x = 1 << 20, max_x = -1;
+ 		static int min_y = 1 << 20, max_y = -1;
+ 		static unsigned seen;
++		static bool dumped;
+ 
++		if (!dumped) {
++			dumped = true;
++			printf("SWEET TOUCH: point %02x %02x %02x %02x %02x %02x %02x %02x"
++			    " %02x %02x %02x %02x\n",
++			    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
++			    buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
++		}
+ 		for (unsigned i = 0; i < TOUCH_MAX; i++) {
+ 			if (!(mask & (1u << i))) {
+ 				continue;
