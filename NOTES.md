@@ -1579,6 +1579,63 @@ mapped. Likely candidates, in order of plausibility:
   first bytes of each section alongside the sum to confirm the offsets.
 - If the bus timing is the issue, the GENI engine at the vendor's 15 MHz becomes
   worth revisiting now that the pins are known.
+## 2026-11-15 01:10 - THE TOUCH CONTROLLER RUNS AND REPORTS TOUCHES
+
+### The finish line of the transport work
+
+```
+FWU    upload NT36675 firmware
+FWU    in bootloader
+pat rb  0000AA55 00001234      pat exp 0000AA55 00001234
+ILM    sram 0x0      size 0x13C3F
+DLM    sram 0x27140  size 0x4377
+info   sram 0x27040  size 0xFF
+crc    ilm 182B6DA7  dlm 3FEF32A1
+(three read-back samples of ILM and DLM all match the source)
+boot rea 0000000000000001
+reset st 0x00A3                 <- RESET_STATE_NORMAL_RUN
+ev chg   0xA2E 0x37E4
+ev changes 0x637 = 1591         <- the event buffer changed 1591 times
+id       0x0E00 0x0072
+```
+
+With a finger swiping the panel during a 20 s window, the event buffer at
+0x22d00 changed **1591 times**. The firmware block reads 0x11/0xee, which is the
+vendor's valid pattern (`buf[1] + buf[2] == 0xff`).
+
+### The four bugs that stood between the last two states
+
+1. `write_chunk()` sent `addr & 0x7f` as the first byte; the vendor's
+   `CTP_SPI_WRITE` applies `SPI_WRITE_MASK` (`| 0x80`). Every firmware byte went
+   out as a *read* command, so the RAM was never written.
+2. `write_bytes()`, used for the CRC descriptor/length/golden registers, had the
+   same omission - so the bootloader compared against empty registers.
+3. The golden CRCs must come from the header (0x18 ILM, 0x1c DLM) because this
+   part has `hw_crc = 2`; computing them with `CheckSum()` is only for hw_crc 0.
+4. **The 13 info sections after 0x30 in the header must be written too.** The one
+   at 0xf0 has size 0xff and targets SRAM 0x27040, immediately below the DLM.
+   Without it the DLM checksum never matched and the bootloader never started the
+   image - that was the difference between `reset state 0x9f` and `0xa3`.
+
+Also required: the hw_crc download path starts with `nvt_bootloader_reset()`
+alone (no hardware reset, no engine reset), and `nvt_bld_crc_enable()` is a
+read-modify-write that sets bit 7 rather than a write of 0x01.
+
+### State of the artefacts
+
+- `shim/touch_fwu.c` + `shim/nvt_fw_array.h` (139264-byte blob converted from
+  `novatek_nt36675_j3s_fw01.bin.ihex`) implement the whole upload.
+- `work/boot/shim-fwu22.img` is the build that demonstrated live touch data.
+- Event bytes seen while swiping: `0A 2E 37 E4 ...`, i.e. point data at
+  `data[1+6*i]` per the vendor layout.
+
+### What is left for touch on iOS
+
+Port the same sequence into the XNU driver: upload the firmware at start, wait
+for 0xa3, configure gpio39 as an input with pull-down, then poll 0x22d00 (or use
+the IRQ) and decode the point data into `touch_report()`. The kernel already has
+the bit-bang transport and the report path from the earlier patches; what it
+lacks is the firmware upload and the post-boot handshake.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
