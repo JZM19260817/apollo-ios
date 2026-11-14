@@ -1636,6 +1636,60 @@ for 0xa3, configure gpio39 as an input with pull-down, then poll 0x22d00 (or use
 the IRQ) and decode the point data into `touch_report()`. The kernel already has
 the bit-bang transport and the report path from the earlier patches; what it
 lacks is the firmware upload and the post-boot handshake.
+## Goal and roadmap: a daily-usable iPhone on apollo (2026-11-15)
+
+**Target.** Redmi K30S Ultra running iOS 16.7.16 as the phone actually used every
+day: unlock, calls, messages, camera, browser, music, sane battery, no crashes.
+
+### What already works
+
+| Area | State |
+| --- | --- |
+| Boot | `boot` partition holds the iOS shim, the phone boots iOS by itself |
+| Display | AppleCLCD drives the 1080x2400 panel, presented to userland as 1125x2436 |
+| Storage | HFS+ root in `userdata`, mounted read-write, logs written |
+| Userland | launchd, backboardd, SpringBoard all run; Hello screen and later UI on screen |
+| Touch | **new**: firmware uploaded over the bit-banged SPI bus, reset state 0xa3, point data decoded, events reaching IOHIDEventService |
+| USB | serial console works, adb only via the Android recovery image |
+
+### The gap to "daily usable", in rough order of pain
+
+1. **Touch calibration.** Events arrive but the coordinates sit a constant offset
+   from where the finger is. SweetFramebuffer presents a 1125x2436 canvas with
+   the 1080x2400 panel centred (offset 22,18) while SweetHID normalises with
+   `(x + off) / logical`. If the real presentation stretches instead of
+   letterboxing, the map has to be `x * 1125 / 1080`. Two corner probes decide it.
+2. **GPU / smoothness.** Every frame is copied by the CPU
+   (`SWEET FB: presents, copied`), so UIKit is slow and animations stutter. This
+   needs an Adreno 650 driver plus the iOS side of it - by far the largest single
+   piece of work left.
+3. **Radios.** No modem, WiFi or Bluetooth driver: no calls, SMS, mobile data or
+   wireless. This is the other large project (IPA/WCN3990 on the Linux side is
+   itself a big stack).
+4. **Audio, camera, sensors, battery/charger reporting** - each an individual
+   driver, each with a userland contract to satisfy.
+5. **Stability work**: panic-free suspend/resume, thermal, watchdog.
+
+### Order of attack that keeps the phone useful
+
+1. Finish touch (calibration, multi-touch, edge cases) - small and immediate.
+2. Measure where the time goes without a GPU: it may be enough for static UI plus
+   a few apps, which decides how urgent the Adreno work is.
+3. Then pick the next daily-use blocker with the user - most likely WiFi, since a
+   phone without any network is hard to keep using.
+4. Keep a bootable Android recovery and `work/boot/boot-backup.img` untouched at
+   all times so the device can always be recovered.
+
+### Facts worth not re-deriving
+
+- Touch wiring: CLK gpio10, MOSI gpio9, MISO gpio8, CS gpio11 (all GPIO, not the
+  GENI engine), reset gpio38 and irq gpio39 in the SOUTH TLMM tile (0x0f500000).
+- The controller runs no firmware from its own flash: the driver uploads
+  `novatek_nt36675_j3s_fw01.bin` and the bootloader only starts it if the ILM,
+  DLM **and** the 0xff-byte info section at SRAM 0x27040 are written with the
+  header's golden checksums. Reaching reset state 0xa3 means it is running.
+- Every SPI write must set bit 7 of the offset byte (`SPI_WRITE_MASK`); reads
+  leave it clear.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
