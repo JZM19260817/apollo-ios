@@ -1690,6 +1690,54 @@ day: unlock, calls, messages, camera, browser, music, sane battery, no crashes.
   header's golden checksums. Reaching reset state 0xa3 means it is running.
 - Every SPI write must set bit 7 of the offset byte (`SPI_WRITE_MASK`); reads
   leave it clear.
+## 2026-11-15 03:25 - touch works end to end; axis swap and slot fixes pending a flash
+
+### Where touch stands
+
+The controller's firmware is uploaded from the kernel and reaches reset state
+`0xa3`, the firmware block reads `0x11/0xee` (the vendor's valid pattern) and
+`touch_report()` drives `IOHIDEventService` - **the phone responds to touch**. The
+first report on hardware read `geom=18x36 lim=1080x2400`, i.e. the panel's real
+resolution, so no scaling is needed anywhere.
+
+### Two bugs found in the interaction, one fixed and one not yet on the device
+
+1. **Axes swapped** (fixed in 0126, **not yet flashed**). A horizontal swipe moved
+   the pointer vertically: the chip's first coordinate tracks the screen's
+   vertical axis. It also explains "only the top half is touchable" - the chip's
+   vertical value (0..2399) was being used as x (0..1079) and clipped, while its
+   horizontal value (0..1079) was used as y, so touches only reached 44% of the
+   height.
+2. **Slot index and status** (fixed in 0127). `x[]/y[]/mask` were indexed by the
+   loop counter instead of the chip's finger id (the vendor uses `input_id - 1`),
+   and `status == 0`, which means "no contact", was accepted and would produce
+   phantom presses at stale coordinates. Now only 1 (down) and 2 (moving) count.
+   0127 also dumps the first point buffer once to confirm the layout.
+
+### Resolution mapping audit - it is correct
+
+`SweetFramebuffer` presents a 1125x2436 logical canvas and copies the centred
+1080x2400 part onto the panel with `dx -= fOffX; dy -= fOffY;` and **no scaling**
+(fOffX = 22, fOffY = 18). `SweetHID` applies exactly the inverse,
+`nx = (x + fOffX) << 16 / fLogicalW`. So once the axes are swapped the positions
+should be right; there is no scale error to chase.
+
+### Practical notes
+
+- `fastboot flash boot` started hanging at `Sending 'boot'` late in the session
+  while `fastboot devices`/`getvar` stayed healthy; re-entering fastboot or
+  replugging clears it. `boot partition size: 0` in the warning is normal for this
+  ABL and does not prevent a write when the link is healthy.
+- `work/boot/shim-slot.img` is built (0125+0126+0127) and waiting to be flashed.
+- The UI is slow because every frame is copied by the CPU; there is no GPU driver
+  yet - see the roadmap section for the order of work.
+
+### Next
+
+1. Flash `shim-slot.img`, confirm horizontal swipes move horizontally and the
+   `raw x .. y ..` lines show x up to ~1079 and y up to ~2399.
+2. If one axis is mirrored, flip it in `bb_poll` (a one-line change plus a sign).
+3. Then multi-touch: two fingers should appear as two slots.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
