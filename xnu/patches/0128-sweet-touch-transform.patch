@@ -1,0 +1,66 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -882,6 +882,23 @@
+ 	return bb_upload_firmware();
+ }
+ 
++/* Axis transform, set from boot args by bb_transform_init(). */
++static int g_swap = 1, g_xflip, g_yflip, g_ready;
++
++static void
++bb_transform_init(void)
++{
++	if (g_ready) {
++		return;
++	}
++	g_ready = 1;
++	(void)PE_parse_boot_argn("sweet_touch_swap", &g_swap, sizeof(g_swap));
++	(void)PE_parse_boot_argn("sweet_touch_xflip", &g_xflip, sizeof(g_xflip));
++	(void)PE_parse_boot_argn("sweet_touch_yflip", &g_yflip, sizeof(g_yflip));
++	printf("SWEET TOUCH: transform swap=%d xflip=%d yflip=%d\n",
++	    g_swap, g_xflip, g_yflip);
++}
++
+ static int
+ bb_poll(void)
+ {
+@@ -889,6 +906,7 @@
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0;
+ 
++	bb_transform_init();
+ 	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
+ 	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
+ 		unsigned pos = 1u + 6u * i;
+@@ -909,14 +927,27 @@
+ 			continue;
+ 		}
+ 		/*
+-		 * The chip's first coordinate tracks the screen's vertical axis and
+-		 * its second the horizontal one.
++		 * The chip's first coordinate spans the long axis (0..2399) and its
++		 * second the short one (0..1079). Swiping down on the right edge shows
++		 * as a left swipe, so the axes are transposed; which of them also needs
++		 * mirroring is decided by the boot args.
+ 		 */
+ 		rx = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
+ 		ry = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
+-		x[slot] = ry;
+-		y[slot] = rx;
++		{
++			int nx = g_swap ? ry : rx;
++			int ny = g_swap ? rx : ry;
++			int xmax = g_swap ? 1079 : 2399;
++			int ymax = g_swap ? 2399 : 1079;
++
++			if (g_xflip) { nx = xmax - nx; }
++			if (g_yflip) { ny = ymax - ny; }
++			if (nx < 0) { nx = 0; } else if (nx > 1079) { nx = 1079; }
++			if (ny < 0) { ny = 0; } else if (ny > 2399) { ny = 2399; }
++			x[slot] = nx;
++			y[slot] = ny;
+ 		mask |= 1u << slot;
++		}
+ 	}
+ 	touch_report(mask, x, y);
+ 
