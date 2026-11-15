@@ -1,0 +1,134 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -908,18 +908,19 @@
+ 
+ 	bb_transform_init();
+ 	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
++
+ 	/*
+ 	 * The vendor's buffer keeps the register address in byte 0 and starts its
+ 	 * records at 1; ours carries data only, so the first record is at 0.
+-	 * Reading from 1 turned id 1 into id 9 and pushed the coordinates past the
+-	 * panel.
++	 * Layout per record: id/status, x high, y high, x low nibble | y low
++	 * nibble, width, pressure.
+ 	 */
+ 	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
+ 		unsigned pos = 6u * i;
+ 		uint8_t id = (uint8_t)(buf[pos] >> 3);
+ 		uint8_t status = (uint8_t)(buf[pos] & 7u);
+ 		unsigned slot;
+-		int rx, ry;
++		int rx, ry, nx, ny;
+ 
+ 		if (id == 0 || id > BB_MAX_FINGERS) {
+ 			continue;
+@@ -932,100 +933,20 @@
+ 		if (slot >= TOUCH_MAX) {
+ 			continue;
+ 		}
+-		/*
+-		 * The chip's first coordinate spans the long axis (0..2399) and its
+-		 * second the short one (0..1079). Swiping down on the right edge shows
+-		 * as a left swipe, so the axes are transposed; which of them also needs
+-		 * mirroring is decided by the boot args.
+-		 */
+ 		rx = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
+ 		ry = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
+-		{
+-			int nx = g_swap ? ry : rx;
+-			int ny = g_swap ? rx : ry;
+-			int xmax = g_swap ? 1079 : 2399;
+-			int ymax = g_swap ? 2399 : 1079;
+ 
+-			if (g_xflip) { nx = xmax - nx; }
+-			if (g_yflip) { ny = ymax - ny; }
+-			if (nx < 0) { nx = 0; } else if (nx > 1079) { nx = 1079; }
+-			if (ny < 0) { ny = 0; } else if (ny > 2399) { ny = 2399; }
+-			x[slot] = nx;
+-			y[slot] = ny;
++		nx = g_swap ? ry : rx;
++		ny = g_swap ? rx : ry;
++		if (g_xflip) { nx = (g_swap ? 1079 : 2399) - nx; }
++		if (g_yflip) { ny = (g_swap ? 2399 : 1079) - ny; }
++		if (nx < 0) { nx = 0; } else if (nx > 1079) { nx = 1079; }
++		if (ny < 0) { ny = 0; } else if (ny > 2399) { ny = 2399; }
++		x[slot] = nx;
++		y[slot] = ny;
+ 		mask |= 1u << slot;
+-		}
+ 	}
+ 	touch_report(mask, x, y);
+-
+-	if (mask) {
+-		static int min_x = 1 << 20, max_x = -1;
+-		static int min_y = 1 << 20, max_y = -1;
+-		static unsigned seen;
+-		static bool dumped;
+-
+-		{
+-			static int ra_min = 1 << 20, ra_max = -1;
+-			static int rb_min = 1 << 20, rb_max = -1;
+-			static unsigned rseen;
+-
+-			for (unsigned i = 0; i < BB_MAX_FINGERS; i++) {
+-				unsigned pos = 6u * i;
+-				uint8_t id = (uint8_t)(buf[pos] >> 3);
+-				uint8_t status = (uint8_t)(buf[pos] & 7u);
+-				int a, b;
+-
+-				if (id == 0 || id > BB_MAX_FINGERS) { continue; }
+-				if (status != 1u && status != 2u) { continue; }
+-				a = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
+-				b = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
+-				if (a < ra_min) { ra_min = a; }
+-				if (a > ra_max) { ra_max = a; }
+-				if (b < rb_min) { rb_min = b; }
+-				if (b > rb_max) { rb_max = b; }
+-			}
+-			if ((++rseen % 200u) == 0u) {
+-				printf("SWEET TOUCH: rawA %d..%d rawB %d..%d\n",
+-				    ra_min, ra_max, rb_min, rb_max);
+-			}
+-		}
+-
+-		{
+-			static unsigned n;
+-
+-			if ((n++ % 20u) == 0u) {
+-				printf("SWEET TOUCH: buf %02x%02x%02x%02x %02x%02x%02x%02x"
+-				    " %02x%02x%02x%02x %02x%02x%02x%02x"
+-				    " %02x%02x%02x%02x %02x%02x%02x%02x"
+-				    " %02x%02x%02x%02x %02x%02x%02x%02x\n",
+-				    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+-				    buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14],
+-				    buf[15], buf[16], buf[17], buf[18], buf[19], buf[20], buf[21],
+-				    buf[22], buf[23], buf[24], buf[25], buf[26], buf[27], buf[28],
+-				    buf[29], buf[30], buf[31]);
+-			}
+-		}
+-
+-		if (!dumped) {
+-			dumped = true;
+-			printf("SWEET TOUCH: point %02x %02x %02x %02x %02x %02x %02x %02x"
+-			    " %02x %02x %02x %02x\n",
+-			    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
+-			    buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
+-		}
+-		for (unsigned i = 0; i < TOUCH_MAX; i++) {
+-			if (!(mask & (1u << i))) {
+-				continue;
+-			}
+-			if (x[i] < min_x) { min_x = x[i]; }
+-			if (x[i] > max_x) { max_x = x[i]; }
+-			if (y[i] < min_y) { min_y = y[i]; }
+-			if (y[i] > max_y) { max_y = y[i]; }
+-		}
+-		if ((++seen % 100u) == 0u) {
+-			printf("SWEET TOUCH: raw x %d..%d y %d..%d\n",
+-			    min_x, max_x, min_y, max_y);
+-		}
+-	}
+ 	return 0;
+ }
+ 
