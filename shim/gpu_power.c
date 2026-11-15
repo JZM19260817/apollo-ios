@@ -150,7 +150,40 @@ void test_touch(void)
 	gcc_branch_on(GCC_GPU_MEMNOC_GFX, "memnoc_gfx");
 	gcc_branch_on(GCC_GPU_SNOC_DVM_GFX, "snoc_dvm");
 
-	/* 2. CX domain first: the GPU CC's own branches live in it. */
+	/*
+	 * 2. The GDSCs have parent rails in apollo's device tree:
+	 *    gpu_cx_gdsc -> pm8150_s3_level, gpu_gx_gdsc -> pm8150a_s1_level,
+	 *    both at level 0x10. Without those votes the domains stay collapsed
+	 *    no matter what is written to the GDSCR.
+	 */
+	{
+		static const char s3_names[4][20] = {"pm8150_s3_level",
+		    "s3_level", "pm8150_s3", "pm8150l_s3_level"};
+		static const char s1_names[3][20] = {"pm8150a_s1_level",
+		    "s1_level", "pm8150a_s1"};
+		uint32_t addr = 0;
+		int rc = -1;
+
+		for (unsigned i = 0; i < 4 && rc; i++) {
+			rc = rpmh_find(s3_names[i], &addr);
+		}
+		con_hex("s3 addr", rc ? 0u : addr);
+		if (!rc) {
+			con_hex("s3 vote", (uint32_t)rpmh_send(addr, 0x10));
+		}
+
+		addr = 0;
+		rc = -1;
+		for (unsigned i = 0; i < 3 && rc; i++) {
+			rc = rpmh_find(s1_names[i], &addr);
+		}
+		con_hex("s1 addr", rc ? 0u : addr);
+		if (!rc) {
+			con_hex("s1 vote", (uint32_t)rpmh_send(addr, 0x10));
+		}
+	}
+
+	/* 3. CX domain: the GPU CC's own branches live in it. */
 	if (!gdsc_on(GPUCC_CX_GDSCR, 0, 0, GPUCC_CX_GDS_HW_CTRL, "cx gdsc", 500)) {
 		con_str("GPU", "CX did not come up");
 		goto out;

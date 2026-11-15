@@ -1909,6 +1909,61 @@ GX domain, then the GPU core answers. Reference material already on disk:
 Practical lesson repeated: one step per line with a marker before every register
 access. Polling the GX GDSCR for two seconds hung the interconnect (v2); the same
 writes with markers and a short wait completed (v3).
+## 2026-11-15 22:40 - GPU: GPUCC up, GX reports PWR_ON, the core still needs the GMU
+
+### Where the shim got to
+
+Four iterations of `shim/gpu_power.c`, each packed and run on the phone:
+
+| build | result |
+| --- | --- |
+| gpu1 | GPLL0 vote, both GCC bus branches, CX GDSCR (PWR_ON), cxo/ahb/cx_gmu branches, GMU clock, SMMU vote all succeed; GX GDSCR writes return 0xb2220000 but the poll gives up |
+| gpu2 | with a 2 s GX poll the interconnect hangs after `vote_smmu` - polling the GX GDSCR while the domain settles wedges the bus |
+| gpu3 | one marker before each GX write: no hang, `gx gdsc` reads 0x02220000 (bit31 clear at 5 ms), RBBM_STATUS 0, counter 0 |
+| gpu4 | adds rpmh votes for the parent rails named in apollo's device tree; the name lookups return 0 (not in the RPMh dictionary), but `gx gdsc` reads **0xb2220000 (PWR_ON)** - yet RBBM_STATUS is still 0 and the always-on counter still does not tick |
+
+So on apollo the GX domain can be made to report powered, and the GPU block still
+reads as zero. That matches `gpucc-sm8250.c` declaring
+`gpu_gx_gdsc.pd.power_on = gdsc_gx_do_nothing_enable`: on SM8250 the GPU core is
+brought up by the **GMU**, not by software touching the GDSC. The sibling port
+(SM7125, a610) can power the core directly, which is why their sequence works
+there and stops here.
+
+### Apollo-specific facts collected on the way
+
+- `gpu@3d00000` (regs 0x40000), `gpucc@3d90000`, GPU SMMU `@3da0000`, GMU `@3d6a000`,
+  `cx_dbgc@3d61000`; chipid `0x6050002` = Adreno 650; GPU IRQ = GIC SPI 300.
+- GDSC parents from apollo's own DT: `gpu_cx_gdsc.parent-supply = pm8150_s3_level`,
+  `gpu_gx_gdsc.parent-supply = pm8150a_s1_level`, both level 0x10. `domain-addr`
+  and `sw-reset` are syscons at 0x3d91508 and 0x3d91008.
+- GX GDSCR = 0x100c, CX GDSCR = 0x106c, CX status 0x1540, GX clamp 0x1508,
+  GX block reset 0x1008, cxo 0x109c, ahb 0x1078, cx_gmu 0x1098,
+  GMU RCG 0x1120, SMMU vote 0x5000.
+- GCC for SM8250 differs from SM7125: GPLL0 to the GPU CC is 0x52000 bit15,
+  the bus branches are 0x7100c and 0x71018 (the sibling uses 0x79004/0x3600c/0x36018).
+- `a650_gmu.bin` (41548 bytes) is **not** in the mainline block format - it starts
+  with a vendor segment table (`01 00 00 00 | size | addr | 0`, e.g. size 0x200 to
+  0x200, 0x400, then 0x3c00 to 0x4000 and 0x8000 to 0x10004000, the a650 DTCM base).
+  Parsing it needs the kgsl header for that table.
+- The firmware set is all present: `a650_zap.mdt/.b00/.b01/.b02/.elf`,
+  `a650_gmu.bin`, `a650_sqe.fw` under `/root/vendor-x/firmware/`.
+
+### Honest assessment of the remaining GPU work
+
+The rest of the chain, in the order the sibling project documents it: GMU memory
+and firmware load, HFI queues, RPMh/RSCC/PDC routing for the GPU rails, the SCM/ZAP
+authentication of the zap shader, GPU SMMU context banks, a CP ring with fences,
+then a 2D blitter - and after that a Metal device for anything beyond frame
+copying. They have that same SoC, have been at it for months, and their own report
+still says `desktop_acceleration_verified=false` with wallpapers failing and
+animation stutter remaining.
+
+So: this is a long track, not a next-step. The short-term wins for daily use are
+elsewhere (battery numbers, sound, vibration, radios), and the cheaper display
+work is to improve the CPU compositor that is currently doing every frame.
+
+The shim probes stay in the tree: `work/boot/shim-gpu1..4.img`, `shim/gpu_power.c`,
+build with `tools/build-gpu.sh`.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
