@@ -1,0 +1,71 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -20,7 +20,7 @@
+  * The SMB5 charger and the QG live on qcom,pm8150b@2 in apollo's device tree;
+  * SID 0 is the plain PM8150 and has none of these registers.
+  */
+-#define PM8150B_SID 2u
++static unsigned g_sid = 2;	/* boot arg sweetbattery_sid overrides */
+ 
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+@@ -175,8 +175,8 @@
+ 	uint16_t previous = 0;
+ 	for (unsigned attempt = 0; attempt < 4; ++attempt) {
+ 		uint8_t lo, hi;
+-		if (sweet_spmi_read(PM8150B_SID, address, &lo) ||
+-		    sweet_spmi_read(PM8150B_SID, address + 1, &hi)) {
++		if (sweet_spmi_read(g_sid, address, &lo) ||
++		    sweet_spmi_read(g_sid, address + 1, &hi)) {
+ 			return false;
+ 		}
+ 		uint16_t next = (uint16_t)((unsigned)lo | ((unsigned)hi << 8));
+@@ -215,14 +215,16 @@
+ 	uint8_t type, present, usb, path, charger, error, temperature;
+ 	uint16_t rawVoltage;
+ 	bool valid = fReal &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x4804, &type) && type == 0x0d &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x4808, &present) && (present & 1u) &&
++	    !sweet_spmi_read(g_sid, 0x4804, &type) && type == 0x0d &&
++	    !sweet_spmi_read(g_sid, 0x4808, &present) && (present & 1u) &&
+ 	    readWord(0x48c0, &rawVoltage) && rawVoltage != 0x8000 &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x1310, &usb) &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x110b, &path) &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x1006, &charger) &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x1007, &error) &&
+-	    !sweet_spmi_read(PM8150B_SID, 0x100d, &temperature);
++	    !sweet_spmi_read(g_sid, 0x1310, &usb) &&
++	    !sweet_spmi_read(g_sid, 0x110b, &path) &&
++	    !sweet_spmi_read(g_sid, 0x1006, &charger) &&
++	    !sweet_spmi_read(g_sid, 0x1007, &error) &&
++	    !sweet_spmi_read(g_sid, 0x100d, &temperature);
++	IOLog("SWEET BAT: sid %u type %02x pres %02x volt %04x usb %02x path %02x chgr %02x err %02x temp %02x\n",
++	    g_sid, type, present, rawVoltage, usb, path, charger, error, temperature);
+ 	unsigned mv = valid ? (unsigned)(((uint64_t)rawVoltage * 194637u) / 1000000u) : 0;
+ 	/* Zero, reset, floating, or implausible data cannot become 0% battery. */
+ 	valid = valid && mv >= 2800 && mv <= 4600;
+@@ -240,7 +242,7 @@
+ 	int ma = 0;
+ 	uint8_t subtype;
+ 	uint16_t rawCurrent;
+-	bool currentValid = !sweet_spmi_read(PM8150B_SID, 0x4805, &subtype) &&
++	bool currentValid = !sweet_spmi_read(g_sid, 0x4805, &subtype) &&
+ 	    (subtype == 3 || subtype == 4) && readWord(0x48c2, &rawCurrent) &&
+ 	    rawCurrent != 0x8000;
+ 	if (currentValid) {
+@@ -270,6 +272,15 @@
+ 	}
+ 	int real = 0;
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
++	{
++		int sid = 2;
++
++		if (PE_parse_boot_argn("sweetbattery_sid", &sid, sizeof(sid)) &&
++		    sid >= 0 && sid <= 15) {
++			g_sid = (unsigned)sid;
++		}
++		IOLog("SWEET BAT: polling SPMI sid %u\n", g_sid);
++	}
+ 	fReal = real == 1 && sweet_spmi_init() == 0;
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
