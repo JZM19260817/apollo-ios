@@ -1,0 +1,36 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -883,7 +883,7 @@
+ }
+ 
+ /* Axis transform, set from boot args by bb_transform_init(). */
+-static int g_swap = 1, g_xflip, g_yflip, g_ready;
++static int g_swap, g_xflip, g_yflip, g_ready;
+ 
+ static void
+ bb_transform_init(void)
+@@ -908,8 +908,14 @@
+ 
+ 	bb_transform_init();
+ 	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
++	/*
++	 * The vendor's buffer keeps the register address in byte 0 and starts its
++	 * records at 1; ours carries data only, so the first record is at 0.
++	 * Reading from 1 turned id 1 into id 9 and pushed the coordinates past the
++	 * panel.
++	 */
+ 	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
+-		unsigned pos = 1u + 6u * i;
++		unsigned pos = 6u * i;
+ 		uint8_t id = (uint8_t)(buf[pos] >> 3);
+ 		uint8_t status = (uint8_t)(buf[pos] & 7u);
+ 		unsigned slot;
+@@ -963,7 +969,7 @@
+ 			static unsigned rseen;
+ 
+ 			for (unsigned i = 0; i < BB_MAX_FINGERS; i++) {
+-				unsigned pos = 1u + 6u * i;
++				unsigned pos = 6u * i;
+ 				uint8_t id = (uint8_t)(buf[pos] >> 3);
+ 				uint8_t status = (uint8_t)(buf[pos] & 7u);
+ 				int a, b;
