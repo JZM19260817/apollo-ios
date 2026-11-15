@@ -1787,6 +1787,66 @@ read them, do not reason from the vendor's buffer layout.
   `nvt fw=11.ee ...`, `transform ...` and a periodic alive line.
 - Patches 0123-0133 are the touch chain: firmware upload, firmware-info offsets,
   slot/status handling, the configurable transform, and the record offset.
+## GPU research (2026-11-15 22:05) - what it takes and in what order
+
+### Why there is no GPU today
+
+iOS never drives a GPU directly. CoreAnimation draws through Metal, Metal loads the
+device's driver (`AGXMetalA11` on an iPhone X), and that driver expects Apple's kernel
+interfaces (IOGPU) and compiles shaders to Apple's ISA. None of those exist here, so
+CoreAnimation falls back to its CPU renderer - which is exactly what we see: every
+frame is memcpy'd by `SweetFramebuffer` and everything is slow.
+
+`/root/bt22/xnu/iokit/Kernel/arm/` has no GPU code at all: only the Sweet* drivers.
+So this is a from-scratch bring-up, and it is the largest remaining piece of the port.
+
+### The three layers (from the ios-sapphire roadmap, Adreno 610)
+
+Their `GPU-ROADMAP.md` lays the path out, and their notes show it working far enough to
+copy every frame with the GPU: 110 us per frame instead of 5 ms.
+
+1. **Kernel: a GPU iOS can use.** Power-up, zap shader through TrustZone, SQE
+   microcode, ring, CP commands; park cleanly (GBIF drain); a 2D blitter (fills and
+   copies); GPU virtual memory (stage-1 tables in the SMMU context bank); map any
+   IOSurface into the GPU's address space; a submission service with a lock;
+   interrupts (SPI) and fences instead of polling; a user-space-openable service;
+   per-process address spaces.
+2. **A Metal driver.** Metal reads `MetalPluginName` from the accelerator service,
+   loads `/System/Library/Extensions/<name>.bundle`, and requires
+   `[cls isSubclassOfClass:[_MTLDevice class]]`; the device comes from
+   `[[cls alloc] initWithAcceleratorPort:]`. Apple's own driver has that shape
+   (`AGXPrincipalDevice` -> `AGXA11Device` -> `IOGPUMetalDevice` -> `_MTLDevice`).
+   A bundle of ours would implement device, queues, command buffers, buffers,
+   textures and encoders over layer 1, building Adreno command streams the way
+   Mesa's turnip does.
+3. **Shaders.** CoreAnimation's are in `QuartzCore.framework/default.metallib`:
+   141 functions (39 vertex, 95 fragment, 7 kernel) - textured and coloured quads,
+   paths, blurs, gradients, tile downsample. They arrive as AIR (Apple LLVM IR);
+   `llvm-dis` reads them, so each can be read exactly and rewritten for the Adreno
+   or translated AIR -> NIR -> Mesa ir3, which already supports a6xx.
+
+Scale, in their words: layer 1 is weeks; layers 2 and 3 are the size of a large
+open-source GPU project.
+
+### What that means for apollo (SM8250, Adreno 650)
+
+The GPU is the same a6xx family as the a610 the roadmap was written on, so KGSL
+(msm-4.19 vendor kernel), turnip and ir3 all apply - ir3a6xx covers a650.
+
+The pragmatic order, because it pays off long before Metal exists:
+
+1. **GPU power-up and a 2D blitter in the shim** (bare metal, like the touch work).
+   Prove: GPUCC clocks and GX rail, SCM zap shader, SQE microcode, ring, CP fill and
+   copy, GPU MMU mapping. The shim already has UFS, RPMh, TLMM and SPMI, so one more
+   peripheral is in familiar territory.
+2. **Port it into XNU** as a service and use it to copy the composed frame to the
+   panel (`sweetfb_gpucopy=1` equivalent). That alone should turn 5 ms per frame of
+   CPU memcpy into ~100 us and make the UI feel much better - without a single line
+   of Metal.
+3. **Then** decide whether to attempt layers 2 and 3.
+
+The shim-first method is what made touch finish in a day after weeks of guessing:
+prove the hardware sequence bare-metal, dump registers, then port. Apply it here.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
