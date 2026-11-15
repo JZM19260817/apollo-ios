@@ -1738,6 +1738,55 @@ should be right; there is no scale error to chase.
    `raw x .. y ..` lines show x up to ~1079 and y up to ~2399.
 2. If one axis is mirrored, flip it in `bb_poll` (a one-line change plus a sign).
 3. Then multi-touch: two fingers should appear as two slots.
+## 2026-11-15 22:00 - TOUCH WORKS: the one-byte offset was the whole story
+
+### The answer
+
+The point records start at **byte 0** of our read, not byte 1. The vendor's
+`point_data` keeps the register address in byte 0, so its records begin at
+`point_data[1]`; our `bb_read()` returns data only, so the first record is at
+`buf[0]`. Reading from 1 turned a perfectly good record into nonsense:
+
+```
+buf 0a 32 0a bc 0c 01
+    ^^ id/status = 1/2 (down, moving)   from byte 0
+       x = (0x32 << 4) | (0xbc >> 4) = 811
+       y = (0x0a << 4) | (0xbc & 0xf) = 172
+       width = 0x0c, pressure = 0x01
+```
+
+From byte 1 the same bytes decode as id 9 with coordinates outside 1080x2400 -
+which is exactly what the diagnostics had been reporting, and why every axis
+transform I tried looked wrong on hardware: I was transposing and mirroring
+garbage.
+
+With the offset fixed the coordinates come out in screen order and the panel
+tracks the finger correctly across its whole surface. The transform boot args
+remain (`sweet_touch_swap`, `_xflip`, `_yflip`) but default to off.
+
+### How the layout was finally pinned down
+
+Not by reasoning - by dumping 32 bytes of the event buffer once a second while a
+finger swept the panel, and reading the bytes:
+
+```
+ff7cb5de b305ff46 ...        <- stale/garbage before any touch
+0a320abc 0c01ffff ...        <- real record: id 1, x 811, y 172
+0a393cb4 0d01ffff ...        <- id 1, x 923, y 964
+0a1a4b13 0d01ffff ...        <- id 1, x 417, y 1203
+```
+
+Four samples with plausible, monotonic coordinates settled it in one round trip.
+Lesson for the rest of the port: when a decode looks wrong, dump the bytes and
+read them, do not reason from the vendor's buffer layout.
+
+### State
+
+- `shim-clean.img` (0133) has the working poller with the diagnostics removed.
+- The kernel log now only carries `SWEET TOUCH: upload state a3 after N ms`,
+  `nvt fw=11.ee ...`, `transform ...` and a periodic alive line.
+- Patches 0123-0133 are the touch chain: firmware upload, firmware-info offsets,
+  slot/status handling, the configurable transform, and the record offset.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
