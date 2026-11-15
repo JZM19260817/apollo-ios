@@ -1847,6 +1847,68 @@ The pragmatic order, because it pays off long before Metal exists:
 
 The shim-first method is what made touch finish in a day after weeks of guessing:
 prove the hardware sequence bare-metal, dump registers, then port. Apply it here.
+## 2026-11-15 22:20 - GPU bring-up: GPUCC is up, the GX domain belongs to the GMU
+
+### What the shim proves so far
+
+`shim/gpu_power.c` (packed as `work/boot/shim-gpu3.img`) runs this sequence on the
+phone and prints one line per step:
+
+```
+gpll0 vo 00000000120bD7F
+gpll0 af 00000000120bD7F
+memnoc_g 0000000000422f1        gcc_gpu_memnoc_gfx (0x7100c) enabled
+snoc_dum 0000000000000001        gcc_gpu_snoc_dvm_gfx (0x71018) enabled
+cx gdsc  0000000001fb?0          bit31 set: CX domain PWR_ON
+gpucc_cx 0000000000000001        cxo branch running
+gpucc_ah 0000000000000001        ahb branch running
+gmu rcg  0000000000000000        GMU clock source configured
+gpucc_cx 0000000000047f1         cx_gmu branch running
+vote_smm 0000000000000001        hlos1 vote for the GPU SMMU
+gx gdsc  0000000002220000        bit31 CLEAR: GX is not on
+rbbm sta 0000000000000000        GPU registers read as zero
+counter  a 00000000 b 00000000   the always-on counter does not tick
+```
+
+So: the GPU CC block is reachable, its clocks run, the CX domain is up - **but the
+GPU core itself is not powered**.
+
+### Why, and what it means
+
+`gpucc-sm8250.c` declares the GX domain as
+
+```c
+static struct gdsc gpu_gx_gdsc = {
+	.gdscr = 0x100c,
+	.clamp_io_ctrl = 0x1508,
+	.pd = { .power_on = gdsc_gx_do_nothing_enable },
+	.flags = CLAMP_IO | AON_RESET | POLL_CFG_GDSCR,
+};
+```
+
+`gdsc_gx_do_nothing_enable` is empty: on SM8250 software cannot switch the GX
+domain on. Only the **GMU** can. The sibling port (SM7125, a610) writes the GDSCR
+directly and gets away with it; our part does not.
+
+The register block is otherwise identical to theirs - the CX/GX GDSCR offsets
+(0x106c/0x100c), gds_hw_ctrl 0x1540, clamp 0x1508, the branch offsets and the
+GMU RCG all match - so their `power_up()` is reusable except for this step. Only
+the GCC offsets differ: SM8250 uses 0x52000 bit15 (GPLL0 to the GPU CC), 0x7100c
+and 0x71018 for the two bus branches.
+
+### Next: the GMU
+
+The path is: load `a650_gmu.bin` into GMU memory, start the GMU, let it power the
+GX domain, then the GPU core answers. Reference material already on disk:
+
+- `/root/vendor-x/firmware/a650_gmu.bin`, `a650_sqe.fw`, `a650_zap.mdt` + `.b00/.b01/.b02/.elf`
+- `/root/wslk/drivers/gpu/drm/msm/adreno/a6xx_gmu.c` - the upstream GMU boot
+- `/root/gpu-ref/iokit/Kernel/arm/SapphireGpu.cpp` - the XNU-side reference (2313 lines)
+- `/root/sapphire-ref` - the sibling project's 13 GPU patches (0145-0161, 0204/0205/0215, 0317, 0319)
+
+Practical lesson repeated: one step per line with a marker before every register
+access. Polling the GX GDSCR for two seconds hung the interconnect (v2); the same
+writes with markers and a short wait completed (v3).
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
