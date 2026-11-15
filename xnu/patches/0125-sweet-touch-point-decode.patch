@@ -1,0 +1,77 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -882,6 +882,23 @@
+ 	return bb_upload_firmware();
+ }
+ 
++/* Axis transform, set from boot args by bb_transform_init(). */
++static int g_swap, g_xflip, g_yflip, g_ready;
++
++static void
++bb_transform_init(void)
++{
++	if (g_ready) {
++		return;
++	}
++	g_ready = 1;
++	(void)PE_parse_boot_argn("sweet_touch_swap", &g_swap, sizeof(g_swap));
++	(void)PE_parse_boot_argn("sweet_touch_xflip", &g_xflip, sizeof(g_xflip));
++	(void)PE_parse_boot_argn("sweet_touch_yflip", &g_yflip, sizeof(g_yflip));
++	printf("SWEET TOUCH: transform swap=%d xflip=%d yflip=%d\n",
++	    g_swap, g_xflip, g_yflip);
++}
++
+ static int
+ bb_poll(void)
+ {
+@@ -889,21 +906,45 @@
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0;
+ 
++	bb_transform_init();
+ 	bb_read(BB_EVENT_PAGE, buf, sizeof(buf));
++
++	/*
++	 * The vendor's buffer keeps the register address in byte 0 and starts its
++	 * records at 1; ours carries data only, so the first record is at 0.
++	 * Layout per record: id/status, x high, y high, x low nibble | y low
++	 * nibble, width, pressure.
++	 */
+ 	for (unsigned i = 0; i < BB_MAX_FINGERS && i < TOUCH_MAX; i++) {
+-		unsigned pos = 1u + 6u * i;
++		unsigned pos = 6u * i;
+ 		uint8_t id = (uint8_t)(buf[pos] >> 3);
+ 		uint8_t status = (uint8_t)(buf[pos] & 7u);
++		unsigned slot;
++		int rx, ry, nx, ny;
+ 
+ 		if (id == 0 || id > BB_MAX_FINGERS) {
+ 			continue;
+ 		}
+-		if (status != 1u && status != 2u && status != 0u) {
++		/* 1 = down, 2 = moving; anything else means no contact. */
++		if (status != 1u && status != 2u) {
++			continue;
++		}
++		slot = id - 1u;
++		if (slot >= TOUCH_MAX) {
+ 			continue;
+ 		}
+-		x[i] = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
+-		y[i] = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
+-		mask |= 1u << i;
++		rx = (int)(((unsigned)buf[pos + 1] << 4) | (buf[pos + 3] >> 4));
++		ry = (int)(((unsigned)buf[pos + 2] << 4) | (buf[pos + 3] & 0x0fu));
++
++		nx = g_swap ? ry : rx;
++		ny = g_swap ? rx : ry;
++		if (g_xflip) { nx = (g_swap ? 1079 : 2399) - nx; }
++		if (g_yflip) { ny = (g_swap ? 2399 : 1079) - ny; }
++		if (nx < 0) { nx = 0; } else if (nx > 1079) { nx = 1079; }
++		if (ny < 0) { ny = 0; } else if (ny > 2399) { ny = 2399; }
++		x[slot] = nx;
++		y[slot] = ny;
++		mask |= 1u << slot;
+ 	}
+ 	touch_report(mask, x, y);
+ 	return 0;
