@@ -142,6 +142,21 @@ void test_touch(void)
 	con_clear(0x00aa0000u);
 	con_str("GPU", "SM8250 power-up probe");
 
+	/*
+	 * Before touching anything: what did the bootloader leave? If the GPU
+	 * answers here, it was already powered and our sequence is what stops it.
+	 */
+	{
+		uint32_t r0 = rd(GPU, REG_RBBM_STATUS);
+		uint32_t c0 = rd(GPU, REG_CP_ALWAYS_ON_COUNTER);
+		uint32_t c1;
+
+		wait_ms(10);
+		c1 = rd(GPU, REG_CP_ALWAYS_ON_COUNTER);
+		con_hex2("as left", "rbbm", r0, "ctr", c0);
+		con_hex2("as left2", "ctr", c1, "d", c1 - c0);
+	}
+
 	/* 1. GPLL0 into the GPU CC, then the GPU's bus clocks. */
 	con_hex("gpll0 vote", rd(GCC, GCC_GPU_GPLL0_VOTE));
 	rmw(GCC, GCC_GPU_GPLL0_VOTE, 0, 1u << 15);

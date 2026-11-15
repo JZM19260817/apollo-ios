@@ -1,0 +1,29 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -391,10 +391,22 @@
+ 			src = 0;
+ 		}
+ 		if (src != 0 && bpe == 4) {
+-			for (int32_t y = 0; y < h; y++) {
+-				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
+-				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
+-				    (size_t)w * 4);
++			/*
++			 * A full-width layer with matching strides is one contiguous
++			 * block: copy it in a single call instead of h row copies.
++			 */
++			if ((uint32_t)w * 4u == fRowBytes &&
++			    s->bytesPerRow == fRowBytes && dx == 0) {
++				memcpy((void *)(fPixels + (uint64_t)dy * fRowBytes),
++				    (const void *)(src + s->offset +
++				    (uint64_t)sy * s->bytesPerRow + (uint64_t)sx * 4),
++				    (size_t)h * fRowBytes);
++			} else {
++				for (int32_t y = 0; y < h; y++) {
++					memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
++					    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
++					    (size_t)w * 4);
++				}
+ 			}
+ 		}
+ 		s->release();
