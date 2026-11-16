@@ -1,0 +1,35 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -300,6 +300,32 @@
+ 		}
+ 		IOLog("SWEET BAT: peripheral scan done for sid %u\n", g_sid);
+ 
++		/* Where does the SMB5 live? Type/subtype plus the three registers
++		 * that matter: 0x1006 charger status, 0x110b power path, 0x1310
++		 * USBIN interrupt status (bit 4 = plugged in). */
++		for (unsigned sid = 0; sid <= 2; sid++) {
++			for (unsigned per = 0x10; per <= 0x16; per++) {
++				uint8_t type = 0, sub = 0, sts = 0, path = 0,
++				    usb = 0;
++
++				if (sweet_spmi_read(sid, (per << 8) | 0x04,
++				    &type) || type == 0 || type == 0xff) {
++					continue;
++				}
++				(void)sweet_spmi_read(sid, (per << 8) | 0x05,
++				    &sub);
++				(void)sweet_spmi_read(sid, (per << 8) | 0x06,
++				    &sts);
++				(void)sweet_spmi_read(sid, (per << 8) | 0x0b,
++				    &path);
++				(void)sweet_spmi_read(sid, (per << 8) | 0x10,
++				    &usb);
++				IOLog("SWEET BAT: sid %u per %02x t %02x s %02x"
++				    " chgr %02x path %02x usb %02x\n",
++				    sid, per, type, sub, sts, path, usb);
++			}
++		}
++
+ 		/*
+ 		 * The candidates: 0x2c answers with the fuel-gauge type, 0x1d,
+ 		 * 0x1e and 0x24 with the SMB charger type, 0x3c with the DC
