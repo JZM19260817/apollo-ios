@@ -2191,6 +2191,72 @@ adb exec-out 'dd if=/dev/block/by-name/cache bs=4096 count=2' > ck.bin
 1. `CM3_SYSRESET = 1` before the ITCM/DTCM writes, then release.
 2. Read `CM3_FW_INIT_RESULT` for `0xbabeface` (or `0x100` on newer firmware).
 3. After that: HFI queues, the CP ring, then a 2D blit.
+## 2026-11-17 01:55 - baseband research: the HakiOS modem stack, and how well apollo matches it
+
+### What the reference has
+
+`/root/hakios-ref/drivers/modem/`, 18,396 lines:
+
+| file | lines | what it is |
+| --- | --- | --- |
+| `hakios.mpss.c` | 6395 | the modem bring-up for their SM6375 reference: firmware through PAS, then SMP2P/GLINK/QRTR/QMI |
+| `hakios.mpss845.c` | 9436 | the same for the SDM845 OnePlus 6T (different doorbells: apss_shared instead of IPCC) |
+| `hakios.ipa.c` | 953 | the IPA data path: GSI rings, endpoints, QMAP framing |
+| `hakios.qmi.c` | 963 | QMI from scratch: 7-byte header + TLVs, transactions, indications |
+| `hakios.nas.c` | 201 | asks the network access service what network and how strong the signal is |
+| `hakios.cell.c` | 448 | the interface the rest of the system talks to |
+
+Their own description of the chain, which is the roadmap for ours:
+
+1. The modem is a Hexagon that stays in reset until someone loads its signed image
+   (`modem.mdt` + `modem.b00..b29`, 85 MB) into its reserved memory and asks
+   TrustZone to authenticate and start it.
+2. Then everything is shared-memory conversation: SMP2P for up/given-up/stopped,
+   GLINK for channels, QRTR on the `IPCRTR` channel for services.
+3. Over QMI: the device management service to put the modem online, and NAS for the
+   network state. Calls, SMS and data come after that.
+
+IPA: they implement IPA 4.11 with GSI 2.11 - the command endpoint (7/channel 5),
+the LAN receive endpoint (9/channel 14, where exceptions land), the modem transmit
+endpoint (2/channel 2) and the modem receive endpoint (16/channel 7), with QMAP
+framing on the modem side and no interrupt (the interface thread polls).
+
+### Why apollo is a good match
+
+apollo's device tree lines up with their SM6375 reference almost exactly:
+
+| item | reference | apollo |
+| --- | --- | --- |
+| IPCC | `0x408000` | `qcom,ipcc@408000`, reg `0x408000` size `0x1000` - **identical** |
+| IPA | IPA 4.11 | `qcom,ipa@1e00000`, `qcom,ipa-hw-ver = 0x11` = **4.11** |
+| IPA blocks | - | ipa-base `0x1e00000` (0x84000), gsi-base `0x1e04000` (0x23000), irqs 311/432 |
+| IPA PAS | - | `ipa_fws` pas-id 0x0f, `ipa_uc` pas-id 0x1b |
+| GLINK | IPCRTR | glink channels include `IPCRTR` |
+| SMEM | - | `qcom,smem` memory-region phandle 0x85, hwlocks 0x86 #3 |
+
+So `hakios.mpss.c` (the IPCC variant, not the SDM845 one) is the right starting
+point, with apollo's modem memory, SMEM item numbers and PAS id substituted.
+
+### Still to find in apollo's tree
+
+- The modem (MPSS) node itself: its PAS id, the reserved memory region and its
+  size. The extracted boot DT shows the SPSS/sensor processor but the MPSS node
+  was not in the region examined; search for `qcom,mss`, `pil-tz-generic` with
+  another pas-id, or the `mpss` reserved-memory node.
+- The SMP2P and GLINK item numbers for apollo (the reference lists its own: SMP2P
+  435/428, GLINK 478..480, last words 421 - the SM8250's differ).
+- Which IPCC client is the modem's on Kona (the reference uses client 2 for MPSS
+  with signal 0 = GLINK and signal 2 = SMP2P).
+
+### Order for the port
+
+1. Start the modem: PAS with `modem.mdt` (the firmware comes from the phone's own
+   vendor partition, not from git), then the SMP2P handshake.
+2. GLINK channel `IPCRTR` up, QRTR over it, and a first QMI exchange (the device
+   management service's "online" message).
+3. Ask NAS for the network - that alone is a visible result.
+4. Then the IPA data path and a rmnet-style interface for iOS, which is what turns
+   "modem online" into "LTE data".
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
