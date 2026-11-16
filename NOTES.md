@@ -2019,6 +2019,74 @@ old gate.
 - The percentage is voltage-derived, not coulomb-counted: it will move with load.
   Starting the FG algorithm would need a write to BATT_SOC_EN_CTL, which was
   deliberately not done.
+## 2026-11-17 00:35 - WiFi research: the QCA6390 needs a PCIe host, the reference has everything else
+
+### The hardware, from apollo's own device tree
+
+```
+qcom,cnss-qca6390@b0000000   compatible = "qcom,cnss-qca6390"
+  wlan-en-gpio  = gpio 20      bt-en-gpio = gpio 21      sw-ctrl-gpio = gpio 124
+  qcom,wlan-rc-num = <0>       (PCIe root complex 0)
+  mhi,max-channels = 0x1e      mhi,timeout = 0x2710      mhi,buffer-len = 0x8000
+  supplies: vdd-wlan-aon / dig 0.95 V, io 1.8 V, rfa1 1.9 V, rfa2 1.35 V
+  qcom,smmu-s1-enable
+qcom,pcie@1c00000              parf 0x1c00000, phy 0x1c06000, dm_core 0x60000000,
+                               elbi 0x60000f20, iatu 0x60001000, conf 0x60100000
+                               config window 0x60200000, MMIO 0x60300000
+                               perst-gpio 79, wake-gpio 81, gdsc + 1p8/0p9/cx supplies
+```
+
+So the radio is **QCA6390 over PCIe with MHI**, not an integrated WCN chip.
+
+### The one project that has done this on iOS
+
+HakiOS, a separate XNU fork, runs iOS 16.5 on a OnePlus 6T with Wi-Fi, LTE, audio,
+Bluetooth and GPU. Its Wi-Fi is the closest thing to a reference implementation:
+
+- `wifi/lx/src` (~7000 lines): LinuxKPI glue - locks, sleeping, work, memory, firmware
+  and the radio's bus, plus `lx_80211.c` standing in for mac80211.
+- `drivers/wifi` (~7200 lines): `hakios.wifi.c` is the driver's state machine (4444
+  lines), `hakios.apple80211.c` (786) implements Apple's private Wi-Fi interface,
+  `hakios.lx.c` (584) provides the calls the Linux driver makes, `hakios.wlfw.c` (545)
+  loads the firmware.
+- `tools/mk-ath11k.sh`: builds **Linux's ath11k unmodified** against **FreeBSD 15.1's
+  LinuxKPI headers** plus their glue, as one object linked into the kernel.
+- Upstream inputs: Linux 7.0.14 (ath11k, BSD-3-Clause-Clear) and FreeBSD 15.1 (LinuxKPI,
+  BSD-2-Clause), both pinned by hash.
+
+**What it does not have is PCIe.** Their comment says it plainly: "the radio's bus, for
+as long as ath11k's own (ahb.c, pcic.c) is not built" - they drive the integrated
+WCN6750 through AHB windows. ath11k's PCI path (`pcic.c`) is not built, and there is
+no PCIe host driver in their tree at all.
+
+### What apollo therefore needs, in order
+
+1. **PCIe host controller driver for XNU.** SM8250's `qcom,pci-msm`: power the GDSC and
+   the 1.8/0.9 V rails, release PERST, bring up the PARF/PHY, wait for link training,
+   then a config-space accessor. Nothing in our kernel touches PCIe today. The vendor's
+   `drivers/pci/controller/dwc/pci-msm.c` is the reference for the register sequence.
+2. **ath11k's PCI/MHI path.** QCA6390 downloads its firmware over MHI; that needs the
+   MHI rings on top of the PCIe driver before ath11k's `pcic.c` can probe.
+3. **Then, and only then, the reference's LinuxKPI and wifi glue applies** - the pieces
+   that are hardware-independent can be ported from HakiOS largely as they are.
+4. **Apple80211**: `hakios.apple80211.c` shows the shape of what iOS expects.
+
+Realistically this is the largest item left, larger than the GPU: a PCIe host driver is
+a project in its own right, and it gates everything above it.
+
+### First concrete step, in the same style as the GPU and touch work
+
+A shim probe that powers the PCIe controller and reads back `parf` and `phy`
+registers - and, if the link comes up, the QCA6390's vendor and device IDs from
+config space. That answers "can we even see the radio" before any driver exists.
+
+### Other notes
+
+- HakiOS's Wi-Fi listens on boot args (`wifi_lx`, `wifi_scan`, `wifi_join`), which is the
+  same style of staged bring-up we have used throughout.
+- Their ath11k build pulls 400 MB of upstream sources; the pinned versions matter because
+  LinuxKPI's 802.11 headers follow a specific mac80211.
+- The reference tree is cloned at `/root/hakios-ref` (branch `fajita`, 47 MB).
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
