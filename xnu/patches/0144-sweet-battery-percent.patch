@@ -1,0 +1,39 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -255,16 +255,29 @@
+ 		unsigned vraw = ((unsigned)vmsb << 8) | vlsb;
+ 		unsigned iraw = ((unsigned)imsb << 8) | ilsb;
+ 
+-		IOLog("SWEET BAT: fg %s soc %u vraw %u iraw %u sts %02x\n",
+-		    fg ? "read" : "failed", soc, vraw, iraw, fsts);
+-		if (fg && soc <= 100) {
+-			mv = vraw > 1000 && vraw < 6000 ? vraw :
+-			    (vraw > 4000 && vraw < 20000 ? vraw / 4 : 4200);
++		IOLog("SWEET BAT: fg %s soc %u lsb %02x msb %02x vraw %u"
++		    " swap %u iraw %u sts %02x\n", fg ? "read" : "failed", soc,
++		    vlsb, vmsb, vraw, ((unsigned)vlsb << 8) | vmsb, iraw, fsts);
++		if (fg) {
++			unsigned pct;
++
++			/*
++			 * vBatt is reported in tenths of a millivolt: 35622 is
++			 * 3562 mV. Fall back through the other plausible scales
++			 * if that lands outside a Li-ion pack's range.
++			 */
++			mv = vraw / 10;
++			if (mv < 2800 || mv > 4600) {
++				mv = vraw / 256;
++			}
+ 			if (mv < 2800 || mv > 4600) {
+ 				mv = 4200;
+ 			}
+-			publish(soc, mv, 0, external, capable, charging,
+-			    soc >= 100, true, false);
++			/* 3300 mV empty, 4200 mV full, clamped. */
++			pct = mv <= 3300 ? 0 : mv >= 4200 ? 100 :
++			    (mv - 3300) * 100 / (4200 - 3300);
++			publish(pct, mv, 0, external, capable, charging,
++			    pct >= 100, true, false);
+ 			return;
+ 		}
+ 	}
