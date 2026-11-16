@@ -1,12 +1,12 @@
 --- a/iokit/Kernel/arm/SweetBattery.cpp
 +++ b/iokit/Kernel/arm/SweetBattery.cpp
-@@ -229,6 +229,37 @@
- 	IOLog("SWEET BAT: sid %u usb %02x path %02x chgr %02x (%s)\n",
- 	    g_sid, usb, path, charger, measured ? "read" : "failed");
- 
+@@ -238,6 +238,38 @@
+ 	bool full = external && state == 5 && !(error & 2u);
+ 	/* No voltage source yet: keep the bootloader-ish value, fix the state. */
+ 	mv = 4200;
 +	/*
-+	 * FG gen4: batt-soc at 0x4000, batt-info at 0x4100. The state of
-+	 * charge is a percentage at 0x4009; vBatt and iBatt are 16-bit words
++	 * FG gen4: batt-soc at 0x4000, batt-info at 0x4100. The monotonic state
++	 * of charge is a percentage at 0x4009; vBatt and iBatt are 16-bit words
 +	 * at 0x41A0 and 0x41A2.
 +	 */
 +	{
@@ -35,6 +35,7 @@
 +		}
 +	}
 +
- 	bool external = measured && (usb & 0x10u) != 0;
- 	bool capable = external && (path & 1u) != 0;
- 	unsigned state = charger & 7u;
++	/* No fuel gauge reading: publish the estimate so nothing goes stale. */
+ 	publish(full ? 100 : estimatePercent(mv), mv, 0, external, capable,
+ 	    charging, full, true, false);
+ }
