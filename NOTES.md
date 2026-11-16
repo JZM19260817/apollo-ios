@@ -1663,22 +1663,37 @@ day: unlock, calls, messages, camera, browser, music, sane battery, no crashes.
    (`SWEET FB: presents, copied`), so UIKit is slow and animations stutter. This
    needs an Adreno 650 driver plus the iOS side of it - by far the largest single
    piece of work left.
-3. **Radios.** No modem, WiFi or Bluetooth driver: no calls, SMS, mobile data or
-   wireless. This is the other large project (IPA/WCN3990 on the Linux side is
-   itself a big stack).
-4. **Audio, camera, sensors, battery/charger reporting** - each an individual
-   driver, each with a userland contract to satisfy.
-5. **Stability work**: panic-free suspend/resume, thermal, watchdog.
+3. **Radio: WiFi (QCA6390, PCIe + MHI).** Research done 2026-11-17. The HakiOS XNU
+   fork is the only iOS Wi-Fi on a Qualcomm part: Linux's ath11k unmodified on
+   FreeBSD's LinuxKPI plus ~14k lines of glue, including an Apple80211 driver - but
+   it drives an integrated WCN6750 over AHB and has **no PCIe host driver at all**,
+   which is exactly what apollo needs first. Order: XNU PCIe host controller
+   (`qcom,pci-msm` at 0x1c00000, perst gpio 79), then MHI, then their glue, then
+   Apple80211.
+4. **Radio: baseband / modem (LTE data, calls, SMS).** The SoC's modem with QMI over
+   the SMEM/GLINK path plus the IPA data mover, then a rmnet-style interface for
+   iOS. CommCenter already runs and crashes for want of a modem (126 crashes, which
+   is the expected shape without one). HakiOS has **LTE data** working on its SDM845
+   fajita, so there is a reference for the whole chain: modem firmware through
+   SCM/PIL, QMI service discovery, IPA, the data path, then the iOS side.
+5. **Audio, camera, sensors, vibration** - each an individual driver, each with a
+   userland contract to satisfy.
+6. **Stability work**: panic-free suspend/resume, thermal, watchdog.
 
-### Order of attack that keeps the phone useful
+### TODO, in the order that keeps the phone useful
 
-1. Finish touch (calibration, multi-touch, edge cases) - small and immediate.
-2. Measure where the time goes without a GPU: it may be enough for static UI plus
-   a few apps, which decides how urgent the Adreno work is.
-3. Then pick the next daily-use blocker with the user - most likely WiFi, since a
-   phone without any network is hard to keep using.
-4. Keep a bootable Android recovery and `work/boot/boot-backup.img` untouched at
-   all times so the device can always be recovered.
+| # | Item | State |
+| --- | --- | --- |
+| 1 | Touch: calibration, multi-touch, edge cases | done (2026-11-15) |
+| 2 | Battery: charging state and level | done (2026-11-16) |
+| 3 | GPU: GMU firmware load, HFI, CP ring, 2D blit | in progress: RSC/PDC done and the GMU window answers; ITCM writes still hang |
+| 4 | **Baseband / modem**: LTE data first, then calls/SMS | not started; HakiOS has a reference |
+| 5 | WiFi: PCIe host, MHI, ath11k, Apple80211 | not started; needs the PCIe host driver first |
+| 6 | Audio (speaker/mic), vibration, camera, sensors | not started |
+| 7 | Suspend/resume, thermal, watchdog, long-run stability | not started |
+
+Keep a bootable Android recovery and `work/boot/boot-backup.img` untouched at all
+times so the device can always be recovered.
 
 ### Facts worth not re-deriving
 
