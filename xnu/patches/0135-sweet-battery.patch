@@ -24,40 +24,121 @@
  			return false;
  		}
  		uint16_t next = (uint16_t)((unsigned)lo | ((unsigned)hi << 8));
-@@ -209,14 +215,16 @@
- 	uint8_t type, present, usb, path, charger, error, temperature;
- 	uint16_t rawVoltage;
- 	bool valid = fReal &&
+@@ -206,44 +212,79 @@
+ void
+ SweetBattery::poll(void)
+ {
+-	uint8_t type, present, usb, path, charger, error, temperature;
+-	uint16_t rawVoltage;
+-	bool valid = fReal &&
 -	    !sweet_spmi_read(0, 0x4804, &type) && type == 0x0d &&
 -	    !sweet_spmi_read(0, 0x4808, &present) && (present & 1u) &&
-+	    !sweet_spmi_read(g_sid, 0x4804, &type) && type == 0x0d &&
-+	    !sweet_spmi_read(g_sid, 0x4808, &present) && (present & 1u) &&
- 	    readWord(0x48c0, &rawVoltage) && rawVoltage != 0x8000 &&
+-	    readWord(0x48c0, &rawVoltage) && rawVoltage != 0x8000 &&
 -	    !sweet_spmi_read(0, 0x1310, &usb) &&
 -	    !sweet_spmi_read(0, 0x110b, &path) &&
 -	    !sweet_spmi_read(0, 0x1006, &charger) &&
 -	    !sweet_spmi_read(0, 0x1007, &error) &&
 -	    !sweet_spmi_read(0, 0x100d, &temperature);
-+	    !sweet_spmi_read(g_sid, 0x1310, &usb) &&
-+	    !sweet_spmi_read(g_sid, 0x110b, &path) &&
-+	    !sweet_spmi_read(g_sid, 0x1006, &charger) &&
-+	    !sweet_spmi_read(g_sid, 0x1007, &error) &&
-+	    !sweet_spmi_read(g_sid, 0x100d, &temperature);
-+	IOLog("SWEET BAT: sid %u type %02x pres %02x volt %04x usb %02x path %02x chgr %02x err %02x temp %02x\n",
-+	    g_sid, type, present, rawVoltage, usb, path, charger, error, temperature);
- 	unsigned mv = valid ? (unsigned)(((uint64_t)rawVoltage * 194637u) / 1000000u) : 0;
- 	/* Zero, reset, floating, or implausible data cannot become 0% battery. */
- 	valid = valid && mv >= 2800 && mv <= 4600;
-@@ -234,7 +242,7 @@
- 	int ma = 0;
- 	uint8_t subtype;
- 	uint16_t rawCurrent;
+-	unsigned mv = valid ? (unsigned)(((uint64_t)rawVoltage * 194637u) / 1000000u) : 0;
+-	/* Zero, reset, floating, or implausible data cannot become 0% battery. */
+-	valid = valid && mv >= 2800 && mv <= 4600;
+-	if (!valid) {
+-		publish(100, 4200, 0, true, true, false, true, false, false);
+-		return;
+-	}
+-	bool external = (usb & 0x10u) != 0;
+-	bool capable = external && (path & 0x10u) && (path & 1u) && !(path & 0x40u);
++	uint8_t usb = 0, path = 0, charger = 0, error = 0, temperature = 0;
++	unsigned mv = 0;
++	bool measured = false;
++
++	/*
++	 * The SMB5 charger answers on this slave: 0x1006 is the charger state,
++	 * 0x110b the power path and 0x1310 the USBIN interrupt status. There is
++	 * no QG at 0x48xx here, which is what the old gate demanded - so every
++	 * poll used to fall through to the static fallback.
++	 */
++	measured = !sweet_spmi_read(g_sid, 0x1310u, &usb) &&
++	    !sweet_spmi_read(g_sid, 0x110bu, &path) &&
++	    !sweet_spmi_read(g_sid, 0x1006u, &charger);
++
++	IOLog("SWEET BAT: sid %u usb %02x path %02x chgr %02x (%s)\n",
++	    g_sid, usb, path, charger, measured ? "read" : "failed");
++
++	bool external = measured && (usb & 0x10u) != 0;
++	bool capable = external && (path & 1u) != 0;
+ 	unsigned state = charger & 7u;
+-	bool charging = capable && state >= 1 && state <= 4 &&
+-	    !(error & 2u) && !(temperature & 0x0cu);
++	/* 1 trickle, 2 pre, 3 fullon, 4 taper: all mean current is flowing. */
++	bool charging = capable && state >= 1 && state <= 4;
+ 	/* Inhibit (0) does not by itself establish full capacity. */
+ 	bool full = external && state == 5 && !(error & 2u);
+-	int ma = 0;
+-	uint8_t subtype;
+-	uint16_t rawCurrent;
 -	bool currentValid = !sweet_spmi_read(0, 0x4805, &subtype) &&
-+	bool currentValid = !sweet_spmi_read(g_sid, 0x4805, &subtype) &&
- 	    (subtype == 3 || subtype == 4) && readWord(0x48c2, &rawCurrent) &&
- 	    rawCurrent != 0x8000;
- 	if (currentValid) {
-@@ -264,7 +272,34 @@
+-	    (subtype == 3 || subtype == 4) && readWord(0x48c2, &rawCurrent) &&
+-	    rawCurrent != 0x8000;
+-	if (currentValid) {
+-		int signedRaw = (rawCurrent & 0x8000u) ? (int)rawCurrent - 65536 : (int)rawCurrent;
+-		/* Linux: negative=charging; IOPMPowerSource: positive=charging, mA. */
+-		ma = (int)(-((int64_t)signedRaw * (subtype == 3 ? 152588 : 305176)) / 1000000);
++	/* No voltage source yet: keep the bootloader-ish value, fix the state. */
++	mv = 4200;
++	/*
++	 * FG gen4: batt-soc at 0x4000, batt-info at 0x4100. The monotonic state
++	 * of charge is a percentage at 0x4009; vBatt and iBatt are 16-bit words
++	 * at 0x41A0 and 0x41A2.
++	 */
++	{
++		uint8_t soc = 0, vlsb = 0, vmsb = 0, ilsb = 0, imsb = 0,
++		    fsts = 0;
++		bool fg = !sweet_spmi_read(g_sid, 0x4009u, &soc) &&
++		    !sweet_spmi_read(g_sid, 0x41a0u, &vlsb) &&
++		    !sweet_spmi_read(g_sid, 0x41a1u, &vmsb) &&
++		    !sweet_spmi_read(g_sid, 0x41a2u, &ilsb) &&
++		    !sweet_spmi_read(g_sid, 0x41a3u, &imsb) &&
++		    !sweet_spmi_read(g_sid, 0x4010u, &fsts);
++		unsigned vraw = ((unsigned)vmsb << 8) | vlsb;
++		unsigned iraw = ((unsigned)imsb << 8) | ilsb;
++
++		IOLog("SWEET BAT: fg %s soc %u lsb %02x msb %02x vraw %u"
++		    " swap %u iraw %u sts %02x\n", fg ? "read" : "failed", soc,
++		    vlsb, vmsb, vraw, ((unsigned)vlsb << 8) | vmsb, iraw, fsts);
++		if (fg) {
++			unsigned pct;
++
++			/*
++			 * vBatt is reported in tenths of a millivolt: 35622 is
++			 * 3562 mV. Fall back through the other plausible scales
++			 * if that lands outside a Li-ion pack's range.
++			 */
++			mv = vraw / 10;
++			if (mv < 2800 || mv > 4600) {
++				mv = vraw / 256;
++			}
++			if (mv < 2800 || mv > 4600) {
++				mv = 4200;
++			}
++			/* 3300 mV empty, 4200 mV full, clamped. */
++			pct = mv <= 3300 ? 0 : mv >= 4200 ? 100 :
++			    (mv - 3300) * 100 / (4200 - 3300);
++			publish(pct, mv, 0, external, capable, charging,
++			    pct >= 100, true, false);
++			return;
++		}
+ 	}
+-	publish(full ? 100 : estimatePercent(mv), mv, ma, external, capable,
+-	    charging, full, true, currentValid);
++
++	/* No fuel gauge reading: publish the estimate so nothing goes stale. */
++	publish(full ? 100 : estimatePercent(mv), mv, 0, external, capable,
++	    charging, full, true, false);
+ }
+ 
+ void
+@@ -264,7 +305,91 @@
  	}
  	int real = 0;
  	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
@@ -88,7 +169,87 @@
 +			    g_sid, per, type, sub);
 +		}
 +		IOLog("SWEET BAT: peripheral scan done for sid %u\n", g_sid);
++
++		/* Where does the SMB5 live? Type/subtype plus the three registers
++		 * that matter: 0x1006 charger status, 0x110b power path, 0x1310
++		 * USBIN interrupt status (bit 4 = plugged in). */
++		for (unsigned sid = 0; sid <= 2; sid++) {
++			for (unsigned per = 0x10; per <= 0x16; per++) {
++				uint8_t type = 0, sub = 0, sts = 0, path = 0,
++				    usb = 0;
++
++				if (sweet_spmi_read(sid, (per << 8) | 0x04,
++				    &type) || type == 0 || type == 0xff) {
++					continue;
++				}
++				(void)sweet_spmi_read(sid, (per << 8) | 0x05,
++				    &sub);
++				(void)sweet_spmi_read(sid, (per << 8) | 0x06,
++				    &sts);
++				(void)sweet_spmi_read(sid, (per << 8) | 0x0b,
++				    &path);
++				(void)sweet_spmi_read(sid, (per << 8) | 0x10,
++				    &usb);
++				IOLog("SWEET BAT: sid %u per %02x t %02x s %02x"
++				    " chgr %02x path %02x usb %02x\n",
++				    sid, per, type, sub, sts, path, usb);
++			}
++		}
++
++		/*
++		 * The candidates: 0x2c answers with the fuel-gauge type, 0x1d,
++		 * 0x1e and 0x24 with the SMB charger type, 0x3c with the DC
++		 * charger type. Dump their first 32 registers.
++		 */
++		{
++			static const uint8_t cand[5] = {0x1d, 0x1e, 0x24, 0x2c,
++				0x3c};
++
++			for (unsigned c = 0; c < 5; c++) {
++				uint8_t per = cand[c];
++
++				for (unsigned r = 0; r < 0x20; r += 8) {
++					uint8_t b[8] = {0};
++					unsigned got = 0;
++
++					for (unsigned k = 0; k < 8; k++) {
++						if (!sweet_spmi_read(g_sid,
++						    ((unsigned)per << 8) | (r + k),
++						    &b[k])) {
++							got++;
++						}
++					}
++					IOLog("SWEET BAT: per %02x %02x:"
++					    " %02x %02x %02x %02x %02x %02x %02x %02x"
++					    " (%u/8)\n", per, r, b[0], b[1], b[2],
++					    b[3], b[4], b[5], b[6], b[7], got);
++				}
++			}
++		}
 +	}
  	/* Publish a complete source BEFORE registerService wakes powerd. */
  	poll();
  	if (fReal) {
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -86,11 +86,16 @@
+ int
+ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ {
+-	/* Restrict access to the battery blocks; keys retain their own lanes. */
++	/*
++	 * SID 0 is the PM8150 and SID 2 the PM8150B, where apollo's device tree
++	 * puts the charger and the fuel gauge. SID 2 has no peripheral whitelist
++	 * because the addresses are what we are still trying to learn.
++	 */
+ 	unsigned peripheral = addr >> 8;
+-	if (!sp_ready || !out || sid != 0 || addr > 0xffffu ||
+-	    (peripheral != 0x10 && peripheral != 0x11 && peripheral != 0x12 &&
+-	    peripheral != 0x13 && peripheral != 0x48)) {
++	if (!sp_ready || !out || addr > 0xffffu ||
++	    sid > 2 ||
++	    (sid == 0 && peripheral != 0x10 && peripheral != 0x11 &&
++	    peripheral != 0x12 && peripheral != 0x13 && peripheral != 0x48)) {
+ 		return -1;
+ 	}
+ 	IOLockLock(sp_lock);
