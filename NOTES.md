@@ -1964,6 +1964,61 @@ work is to improve the CPU compositor that is currently doing every frame.
 
 The shim probes stay in the tree: `work/boot/shim-gpu1..4.img`, `shim/gpu_power.c`,
 build with `tools/build-gpu.sh`.
+## 2026-11-17 00:10 - battery: charging state and a live percentage
+
+### What works now
+
+```
+SWEET BAT: sid 2 usb 10 path 95 chgr 04 (read)   <- plugged: USBIN bit4, valid path
+SWEET BAT: sid 2 usb 26 path 02 chgr 47 (read)   <- unplugged: bit clear, charge disabled
+SWEET BAT: fg read soc 255 lsb XX msb XX vraw 35622 ... iraw 913 sts c2
+```
+
+- **Charging state** comes from the SMB5 at SID 2: 0x1310 USBIN interrupt status
+  (bit 4 = plugged), 0x110b power path (bit 0 = valid input), 0x1006 charger state
+  (1..4 = current flowing). Verified by unplugging on the device.
+- **Battery level** comes from the FG gen4 vBatt word at 0x41A0/0x41A1, mapped
+  3300 mV = 0% to 4200 mV = 100%. The device showed one bar at ~29%, matching the
+  computed value, and the raw word falls while the screen is on (36090 -> 35622),
+  so it tracks discharge.
+
+### Why the numbers are what they are
+
+The whole battery detour came from three separate bugs, each of which produced a
+plausible but wrong result:
+
+1. `sweet_spmi_read()` rejected every slave except 0 while the battery driver read
+   SID 2, so the published registers were zero-initialised locals. The log looked
+   like "the registers are empty".
+2. The polling gate required a QG at 0x4804 (peripheral 0x48); SID 2 has no
+   peripheral 0x48 at all, so every poll fell through to the static fallback of
+   "100%, AC, not charging" - the phone claimed to be charging forever.
+3. The monotonic SOC register (0x4009) reads 0xff: the FG's algorithm is started by
+   the Android driver writing `BATT_SOC_EN_CTL`. Without that, only the voltage is
+   usable, hence the voltage-derived percentage.
+
+### apollo's own numbers, from its device tree
+
+- `qcom,pm8150b@2` is SID 2 and holds the SMB5 (`qcom,qpnp-smb5`); SID 0 is the
+  plain PM8150, SID 3 only PWM/LEDs.
+- SMB5 register bases are the smb5-reg.h ones: CHGR 0x1000, DCDC 0x1100,
+  USBIN 0x1300, so periphs 0x10..0x16 - the driver's addresses were right all along.
+- FG gen4 sub-nodes: `fg-batt-soc@4000`, `fg-batt-info@4100`, `fg-rradc@4200`,
+  `fg-memif@4300`. Hence 0x4009 SOC, 0x41A0/A1 vBatt, 0x41A2/A3 iBatt, 0x4010 status.
+
+### Peripherals of PM8150B, as scanned on the device
+
+0x01, 0x04-0x06, 0x08 (revid), 0x09, 0x10-0x1b (regulators), 0x1a/0x1d/0x1e/0x24
+(SMB), 0x2c (FG), 0x30-0x39 (temp), 0x3c (DC charger), 0x40-0x43 (FG gen4 blocks),
+0x59, 0x66-0x67, 0x70-0x75. There is no peripheral 0x48, which is what broke the
+old gate.
+
+### Still open
+
+- SMB5 charging current (CHGR 0x1000 block) is not read yet, so mA stays 0.
+- The percentage is voltage-derived, not coulomb-counted: it will move with load.
+  Starting the FG algorithm would need a write to BATT_SOC_EN_CTL, which was
+  deliberately not done.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
