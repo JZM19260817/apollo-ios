@@ -2087,6 +2087,95 @@ config space. That answers "can we even see the radio" before any driver exists.
 - Their ath11k build pulls 400 MB of upstream sources; the pinned versions matter because
   LinuxKPI's 802.11 headers follow a specific mac80211.
 - The reference tree is cloned at `/root/hakios-ref` (branch `fajita`, 47 MB).
+## 2026-11-17 01:25 - GPU: RSC, PDC and a live GMU window; battery finished earlier today
+
+### Battery (finished)
+
+Charging state and a live percentage both work on the device; see the notes section
+above for the three bugs. The user sees the level drop while the screen is on.
+
+### GPU: today's chain of discoveries
+
+The GPU's register block read as zero through every earlier attempt. Today it came
+alive, and the reasons are in the vendor's `adreno_a6xx_gmu.c`:
+
+1. **RSC first.** `a6xx_load_rsc_ucode()` has an **a650-specific path**: the RSCC
+   lives at its own base (`0x3de0000`, the "rscc" region of the kgsl-3d0 node in
+   apollo's DT) and takes a five-word sequencer ucode
+   (`EAAAE5A0 E1A1EBAB A2E0A581 ECAC82E2 0020EDAD`) plus a PDC handshake setup.
+   After writing it, `RSC_STATUS0` reads `0x01000000` (the SDE gating bit) and the
+   ucode reads back correctly.
+2. **PDC next.** `a6xx_load_pdc_ucode()` writes a sequencer and TCS command tables
+   that map power states onto the CX/MX/XO rails; the rail addresses come from the
+   command DB (`cx.lvl`, `mx.lvl`, `xo.lvl`).
+3. **Then the GMU answers.** With RSC and PDC programmed, `CM3_CFG` reads
+   `0x06A7A06E` and `CM3_FW_INIT_RESULT` reads `0x40F90084` - the window is alive.
+
+### The GMU's addressing, settled by the reference implementation
+
+HakiOS's `drivers/gpu/hakios.adreno.c` defines `GMU_WORD(n) = 4 * n`, i.e. the
+register offsets are **word indices**:
+
+```
+GMU_ITCM 0x3000   GMU_DTCM 0x7000
+GMU_CM3_SYSRESET 0x14000   BOOT_CONFIG 0x14004
+GMU_CM3_FW_INIT_RESULT 0x14070   GMU_CM3_CFG 0x140b4
+```
+
+Reading the byte-offset versions (0x50b4 etc.) returns values from unrelated
+registers, and reading/writing 0x0c00 hangs the interconnect - both were tried on
+the phone.
+
+### Command DB
+
+The layout is the upstream one and the entries are as expected:
+
+```
+header: u32 version, u8 magic[4] = db 30 03 0c, rsc_hdr[8] (16 bytes), ...
+rsc_hdr: u16 slv_id, u16 header_offset, u16 data_offset, u16 cnt
+entry:   u8 id[8], u32 priority[2], u32 addr, u16 len, u16 offset
+```
+
+On apollo the ARC slave is 3 with 22 entries starting at `cx.lvl = 0x30000`,
+`cx.tmr = 0x30004`, `mx.lvl = 0x30010`; slave 5 has BCM resources (`MC0`, `SH0`),
+slave 4 has the VRM rails (`smpa4 = 0x40000`). The dump confirmed the ids are
+exactly `cx.lvl` etc., zero padded (`is cx.lvl = 1`).
+
+The shim now has a `db_find()` that works on words (`b0 == q0 && b1 == q1`); the
+earlier per-byte versions kept getting the base address arithmetic wrong.
+
+### Where the firmware load stands
+
+`a650_gmu.bin` (41548 bytes) is a vendor segment table: eight bytes of padding,
+then 16-byte entries `{type = 1, size, dest, 0}`, six of them, then the payload at
+0x68. Destinations below 0x4000 are ITCM and 0x10004000.. are DTCM (the a650
+family's DTCM base).
+
+Writing the ITCM segments hangs the bus even with the corrected window address, so
+the next thing to try is holding the CM3 in reset (`CM3_SYSRESET = 1`) *before*
+writing its memories, then `BOOT_CONFIG = 2` and release. The shim now keeps a
+**cumulative checkpoint** in the cache partition, so after a hang the cache holds
+every step that was reached, not just the last one - read it with:
+
+```
+adb exec-out 'dd if=/dev/block/by-name/cache bs=4096 count=2' > ck.bin
+```
+
+### Files
+
+- `shim/gpu_rsc.c` - the whole chain: GPUCC power, RSC ucode, cmd_db lookup, PDC,
+  GMU firmware load and CM3 start. Build with `tools/build-rsc.sh`, pack like the
+  other shim images.
+- Images `work/boot/shim-rsc1..15.img`; the cumulative-checkpoint one is rsc15.
+- `/root/hakios-ref` - the HakiOS tree (its `hakios.adreno.c` is the GPU reference).
+- `/root/gmu_vendor.c`, `/root/a6xx_reg.h`, `/root/cmd-db.c` - vendor and upstream
+  references kept for the next round.
+
+### Next
+
+1. `CM3_SYSRESET = 1` before the ITCM/DTCM writes, then release.
+2. Read `CM3_FW_INIT_RESULT` for `0xbabeface` (or `0x100` on newer firmware).
+3. After that: HFI queues, the CP ring, then a 2D blit.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
