@@ -1,0 +1,40 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -229,6 +229,37 @@
+ 	IOLog("SWEET BAT: sid %u usb %02x path %02x chgr %02x (%s)\n",
+ 	    g_sid, usb, path, charger, measured ? "read" : "failed");
+ 
++	/*
++	 * FG gen4: batt-soc at 0x4000, batt-info at 0x4100. The state of
++	 * charge is a percentage at 0x4009; vBatt and iBatt are 16-bit words
++	 * at 0x41A0 and 0x41A2.
++	 */
++	{
++		uint8_t soc = 0, vlsb = 0, vmsb = 0, ilsb = 0, imsb = 0,
++		    fsts = 0;
++		bool fg = !sweet_spmi_read(g_sid, 0x4009u, &soc) &&
++		    !sweet_spmi_read(g_sid, 0x41a0u, &vlsb) &&
++		    !sweet_spmi_read(g_sid, 0x41a1u, &vmsb) &&
++		    !sweet_spmi_read(g_sid, 0x41a2u, &ilsb) &&
++		    !sweet_spmi_read(g_sid, 0x41a3u, &imsb) &&
++		    !sweet_spmi_read(g_sid, 0x4010u, &fsts);
++		unsigned vraw = ((unsigned)vmsb << 8) | vlsb;
++		unsigned iraw = ((unsigned)imsb << 8) | ilsb;
++
++		IOLog("SWEET BAT: fg %s soc %u vraw %u iraw %u sts %02x\n",
++		    fg ? "read" : "failed", soc, vraw, iraw, fsts);
++		if (fg && soc <= 100) {
++			mv = vraw > 1000 && vraw < 6000 ? vraw :
++			    (vraw > 4000 && vraw < 20000 ? vraw / 4 : 4200);
++			if (mv < 2800 || mv > 4600) {
++				mv = 4200;
++			}
++			publish(soc, mv, 0, external, capable, charging,
++			    soc >= 100, true, false);
++			return;
++		}
++	}
++
+ 	bool external = measured && (usb & 0x10u) != 0;
+ 	bool capable = external && (path & 1u) != 0;
+ 	unsigned state = charger & 7u;
