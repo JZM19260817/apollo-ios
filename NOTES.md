@@ -2301,6 +2301,58 @@ first, or the block layout here differs from mainline's a6xx.
 
 The engine is otherwise unchanged: RSC ucode (verified by read-back), PDC sequencing
 and the command DB lookup all work, and `GMU CM3_CFG` reads a real value.
+## 2026-11-17 23:45 - GPU: the GMU window is not contiguous, and ITCM is in a hole
+
+### The map, measured on the phone
+
+Each probe writes its own checkpoint before the read, so the cache partition says
+which offset hung:
+
+```
+w0000  0x0000  reads
+w0100  0x0100  reads
+w0c00  0x0c00  reads
+w1000  0x1000  HANGS
+w2000  0x2000  HANGS
+```
+
+And from the earlier runs, `0x140b4` (CM3_CFG, word-indexed 0x502d * 4) reads fine,
+`0x14070` (FW_INIT_RESULT) too.
+
+So the block looks like this:
+
+```
+0x00000 - 0x00fff   wrapper registers              readable
+0x01000 - 0x13fff   hole: a read hangs the bus     not mapped
+0x14000 - ...       CM3 registers                  readable
+```
+
+**That matters because ITCM was assumed to be at `0x3000`** (HakiOS's
+`GMU_WORD(0x0c00)`) - which lands inside the hole. So the ITCM write never had a
+chance: it was never a write problem, the address does not exist on this part.
+
+### What this means for the addressing
+
+`GMU_WORD(n) = 4n` holds for the CM3 register block (0x14000 onwards) but not for
+the memory windows. Two possibilities remain:
+
+1. The memory windows are addressed differently: mainline's
+   `gmu_write_bulk(REG_A6XX_GMU_CM3_ITCM_START + reg_offset, ...)` adds a **word
+   count** to the base, which only makes sense if the window advances one register
+   per word (i.e. the base is a register index and each word is +1 in that index).
+2. The windows are not reachable at all until something else is enabled - the GMU's
+   own power rail through its RPMh votes, or the "GMU is out of reset" state.
+
+### Next step
+
+Read the vendor's `gmu_core_regwrite()` / `gmu_core_regread()` implementation
+(`drivers/gpu/msm/kgsl_gmu.c` or `adreno_gmu.c` in the same tree) - it is the only
+place that says exactly how a GMU offset becomes an address, and it explains why
+the same convention works for the CM3 registers and not for the memory windows.
+
+Everything else below the firmware load is now verified on hardware: GPUCC power,
+RSC ucode (read back), command DB lookup, PDC sequencing, and the GMU register
+window answering at 0x140b4.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

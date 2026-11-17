@@ -448,6 +448,29 @@ void test_touch(void)
 	    rd(GMU, CM3_FW_INIT));
 
 	/*
+	 * Map the window: which offsets answer at all? Every read is preceded by
+	 * its own checkpoint, so the cache says which offset hung the bus.
+	 */
+	{
+		/* 0x0000..0x0c00 read; 0x1000 hangs. Probe above the hole. */
+		static const uint32_t offs[8] = {0x2000u, 0x3000u, 0x4000u,
+		    0x7000u, 0xa000u, 0x10000u, 0x12000u, 0x14000u};
+		static const char names[8][8] = {"w2000", "w3000", "w4000",
+		    "w7000", "wa000", "w10000", "w12000", "w14000"};
+		unsigned i;
+
+		for (i = 0; i < 8; i++) {
+			ckpt(names[i]);
+			con_hex2("win", "off", offs[i], "val",
+			    rd(GMU, offs[i]));
+		}
+	}
+
+	con_str("GPU", "window mapped, halted");
+	ckpt("done");
+	return;
+
+	/*
 	 * Hold the processor in reset before its memories are written: the ITCM
 	 * write hung with the core free-running, and a halted CM3 is what the
 	 * vendor's own loading sequence implies.
