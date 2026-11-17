@@ -491,18 +491,27 @@ void test_touch(void)
 			nm[3] = (char)(0x30 + i);
 			ckpt(nm);
 			con_hex2("seg", "size", sizes[i], "dest", dests[i]);
-			if (dests[i] < 0x4000u) {
+			/*
+			 * Only the TCM windows are written here. Anything else is a
+			 * GMU memory-region block, which lives in the GMU's IOMMU
+			 * address space and needs page tables; skip it for now and see
+			 * whether the CM3 starts without it.
+			 */
+			if (dests[i] < 0x4000u && dests[i] + sizes[i] <= 0x4000u) {
 				for (k = 0; k < sizes[i]; k += 4) {
 					wr(GMU, CM3_ITCM + dests[i] + k,
 					    fw32(data + k));
 				}
 			} else if (dests[i] >= 0x10004000u &&
-			    dests[i] < 0x10008000u) {
+			    dests[i] + sizes[i] <= 0x10008000u) {
 				for (k = 0; k < sizes[i]; k += 4) {
 					wr(GMU, CM3_DTCM +
 					    (dests[i] - 0x10004000u) + k,
 					    fw32(data + k));
 				}
+			} else {
+				con_hex2("skip", "dest", dests[i], "size",
+				    sizes[i]);
 			}
 			data += (sizes[i] + 3u) & ~3u;
 		}
