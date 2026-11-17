@@ -447,6 +447,15 @@ void test_touch(void)
 	con_hex2("gmu", "cfg", rd(GMU, GMU_CM3_CFG), "init",
 	    rd(GMU, CM3_FW_INIT));
 
+	/*
+	 * Hold the processor in reset before its memories are written: the ITCM
+	 * write hung with the core free-running, and a halted CM3 is what the
+	 * vendor's own loading sequence implies.
+	 */
+	ckpt("cm3-reset");
+	wr(GMU, CM3_SYSRESET, 1u);
+	wait_ms(2);
+
 	/* Load a650_gmu.bin: table at 0x8, payload after it. */
 	ckpt("gmu-fw");
 	{

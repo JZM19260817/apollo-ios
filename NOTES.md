@@ -2257,6 +2257,50 @@ point, with apollo's modem memory, SMEM item numbers and PAS id substituted.
 3. Ask NAS for the network - that alone is a visible result.
 4. Then the IPA data path and a rmnet-style interface for iOS, which is what turns
    "modem online" into "LTE data".
+## 2026-11-17 23:35 - GPU: CM3 held in reset still hangs on the ITCM write
+
+### What was tried
+
+`shim/gpu_rsc.c` now asserts `CM3_SYSRESET` (word-indexed 0x14000) and waits before
+writing the firmware segments, on the theory that the core must be halted to write
+its instruction memory. The cumulative checkpoint in the cache partition shows:
+
+```
+pdc-load
+gmu-read
+cm3-reset
+gmu-fw          <- stops here
+```
+
+So the reset made no difference: the first ITCM write (`0x3000 + dest`) still hangs
+the interconnect. The GMU register window does answer (`CM3_CFG` at 0x140b4 reads
+back), so the block is reachable - it is the memory window that is not.
+
+### Why this may be the wrong approach
+
+The vendor's `a6xx_gmu_load_firmware()` does **not** copy the firmware itself: it
+walks the image's zero-length metadata blocks (prealloc requests) and calls
+`gmu_cache_finalize()`. The copy is done by the `gmu_core` helpers, and the vendor
+driver (`gmu_vendor.c`) reaches the GMU through a different path than a plain
+`writel` to an ITCM window. Mainline's `gmu_write_bulk()` is the simple version, and
+that is what this shim imitates - so either the window needs something else enabled
+first, or the block layout here differs from mainline's a6xx.
+
+### Next things to try, in order
+
+1. **Check what the GMU window actually maps.** Read a handful of offsets inside
+   0x3d6a000 (for example 0x0, 0x1000, 0x3000, 0x7000, 0x14000) in one run with a
+   checkpoint before each, so the first offset that hangs is known. That costs one
+   power cycle and maps the block.
+2. **The RPMh votes.** `a6xx_gmu_rpmh_votes_init()` programs the GMU's own RPMh
+   interface from a table keyed by the SoC; without those votes the GMU's rail may
+   stay off even though the register window responds. The table for our part has to
+   come from the vendor tree (`adreno_a6xx_gmu.c`'s `rpmh_votes` / `a6xx_rpmh_start`).
+3. Re-read `a6xx_rpmh_start()` in `gmu_vendor.c` in full - it is the step between
+   "registers answer" and "memory is writable".
+
+The engine is otherwise unchanged: RSC ucode (verified by read-back), PDC sequencing
+and the command DB lookup all work, and `GMU CM3_CFG` reads a real value.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
