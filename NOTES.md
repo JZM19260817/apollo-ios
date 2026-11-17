@@ -2353,6 +2353,56 @@ the same convention works for the CM3 registers and not for the memory windows.
 Everything else below the firmware load is now verified on hardware: GPUCC power,
 RSC ucode (read back), command DB lookup, PDC sequencing, and the GMU register
 window answering at 0x140b4.
+## 2026-11-18 00:00 - GPU: the CM3 register block is fully mapped and answers correctly
+
+### The map that ran to completion
+
+Unlike the earlier probes, this run finished - every offset in the CM3 block reads:
+
+```
+0x00000  wrapper registers            reads
+0x00100                               reads
+0x00c00                               reads
+0x01000                               HANGS (earlier probe)
+0x02000                               HANGS (earlier probe)
+0x14000  CM3_SYSRESET     = 0x00000001   <- the core is held in reset
+0x14004  CM3_BOOT_CONFIG  = 0x00000000
+0x14010                  = 0x00000000
+0x14040                  = 0x00000000
+0x14070  FW_INIT_RESULT   = 0x00000000
+0x140b4  CM3_CFG          = 0x00004052   <- exactly the value mainline writes
+0x14610  HFI_QTBL_INFO    = 0x00000000
+0x14614  HFI_QTBL_ADDR    = 0x00000000
+```
+
+`CM3_CFG` reading `0x4052` is the useful part: mainline's `a6xx_gmu_fw_start()`
+writes exactly `0x4052` to that register, and it also sets `SYSRESET = 1` before
+loading. Both states match what a not-yet-loaded GMU should look like, so **the CM3
+register addressing is right** - `GMU_WORD(n) = 4n` holds there.
+
+The only broken assumption is where the firmware memories are: the reference's
+`GMU_ITCM = GMU_WORD(0x0c00) = 0x3000` lands inside the 0x1000..0x13fff hole, which
+hangs on a read.
+
+### Two readings of the hole
+
+1. The hole is genuinely unmapped on this part and the ITCM lives elsewhere.
+2. A memory window into a **halted** core does not respond to reads (the core is in
+   reset, `SYSRESET = 1`), while writes might still land. This is worth testing
+   because a single write that completes, followed by a read that fails, would prove
+   it - and mainline never reads ITCM back.
+
+### Next step, small and safe
+
+One run that does, in order, with a checkpoint before each:
+
+1. write a known word to `0x3000` (ITCM);
+2. write another to `0x7000` (DTCM);
+3. read `CM3_CFG` again (does the block still answer?);
+4. release `SYSRESET` and read `FW_INIT_RESULT` expecting `0xbabeface`.
+
+If step 1 completes, the hole is a read-only artefact of the halted core and the
+firmware load can proceed exactly as mainline does it.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

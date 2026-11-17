@@ -452,11 +452,11 @@ void test_touch(void)
 	 * its own checkpoint, so the cache says which offset hung the bus.
 	 */
 	{
-		/* 0x0000..0x0c00 read; 0x1000 hangs. Probe above the hole. */
-		static const uint32_t offs[8] = {0x2000u, 0x3000u, 0x4000u,
-		    0x7000u, 0xa000u, 0x10000u, 0x12000u, 0x14000u};
-		static const char names[8][8] = {"w2000", "w3000", "w4000",
-		    "w7000", "wa000", "w10000", "w12000", "w14000"};
+		/* 0x1000 and 0x2000 hang; 0x140b4 reads. Map the CM3 block. */
+		static const uint32_t offs[8] = {0x14000u, 0x14004u, 0x14010u,
+		    0x14040u, 0x14070u, 0x140b4u, 0x14610u, 0x14614u};
+		static const char names[8][8] = {"c14000", "c14004", "c14010",
+		    "c14040", "c14070", "c140b4", "c14610", "c14614"};
 		unsigned i;
 
 		for (i = 0; i < 8; i++) {
