@@ -2403,6 +2403,63 @@ One run that does, in order, with a checkpoint before each:
 
 If step 1 completes, the hole is a read-only artefact of the halted core and the
 firmware load can proceed exactly as mainline does it.
+## 2026-11-18 00:05 - GPU: the ITCM segments load; the rest are not TCM at all
+
+### What the per-segment checkpoints showed
+
+```
+gmu-fw -> seg0 -> seg1 -> seg2 -> seg3 -> stop
+```
+
+Segments 0, 1 and 2 went in cleanly - they are the ITCM ones:
+
+| seg | size | dest | where |
+| --- | --- | --- | --- |
+| 0 | 0x200 | 0x200 | ITCM |
+| 1 | 0x200 | 0x400 | ITCM |
+| 2 | 0x3c00 | 0x4000 | ITCM |
+| 3 | 0x8000 | 0x10004000 | **not DTCM** |
+| 4 | 0x3fe0 | 0x10007fdc | **not DTCM** |
+
+### Why segment 3 hung
+
+Mainline decides where a block goes with a **16 KB range check**:
+
+```c
+if (in_range(blk->addr, itcm_base, SZ_16K))       -> ITCM window
+else if (in_range(blk->addr, dtcm_base, SZ_16K))  -> DTCM window
+else if (!fw_block_mem(&gmu->icache, blk) &&
+         !fw_block_mem(&gmu->dcache, blk) &&
+         !fw_block_mem(&gmu->dummy, blk))         -> error
+```
+
+Segment 3 is 0x8000 bytes at 0x10004000: **twice the size of the 16 KB DTCM window**, so
+it fails the DTCM range check. It belongs to one of the GMU's **memory regions** -
+icache, dcache or the "dummy" region - which are ordinary DMA buffers the driver
+allocates and registers with the GMU, not the TCM windows. Writing it into the TCM
+window runs off the end of the window and hangs the interconnect, which is exactly
+what happened.
+
+### So the loading model is now clear
+
+1. **ITCM blocks** (below 0x4000) go straight into the CM3 ITCM window at 0x3000 -
+   **proven working on the phone**, three segments, 0x4000 bytes.
+2. **DTCM blocks** (0x10004000 + less than 0x4000) go into 0x7000. None of this
+   firmware's segments qualify.
+3. **Everything else** needs the GMU memory-region mechanism: a DMA buffer in normal
+   RAM, registered with the GMU through its own registers (mainline's
+   `a6xx_gmu_memory_alloc` / `fw_block_mem`), with the buffer's address given to the
+   firmware.
+
+### Next step
+
+Implement the memory regions: allocate a buffer (the shim can use a static 128 KB
+block), copy segments 3 and 4 into it, fill the GMU's region descriptors the way
+`a6xx_gmu_memory_alloc` does, then start the CM3 and poll `FW_INIT_RESULT`.
+
+The half that is already done is the harder half: **the CM3 accepts firmware into its
+ITCM from this shim**, which means the GMU can be brought up without the vendor's
+driver.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

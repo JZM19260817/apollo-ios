@@ -448,27 +448,12 @@ void test_touch(void)
 	    rd(GMU, CM3_FW_INIT));
 
 	/*
-	 * Map the window: which offsets answer at all? Every read is preceded by
-	 * its own checkpoint, so the cache says which offset hung the bus.
+	 * Writes to 0x3000 and 0x7000 complete even though reads there hang, so the
+	 * memory windows are usable with the core held in reset. Load the firmware.
 	 */
-	{
-		/* 0x1000 and 0x2000 hang; 0x140b4 reads. Map the CM3 block. */
-		static const uint32_t offs[8] = {0x14000u, 0x14004u, 0x14010u,
-		    0x14040u, 0x14070u, 0x140b4u, 0x14610u, 0x14614u};
-		static const char names[8][8] = {"c14000", "c14004", "c14010",
-		    "c14040", "c14070", "c140b4", "c14610", "c14614"};
-		unsigned i;
-
-		for (i = 0; i < 8; i++) {
-			ckpt(names[i]);
-			con_hex2("win", "off", offs[i], "val",
-			    rd(GMU, offs[i]));
-		}
-	}
-
-	con_str("GPU", "window mapped, halted");
-	ckpt("done");
-	return;
+	ckpt("cm3-reset");
+	wr(GMU, CM3_SYSRESET, 1u);
+	wait_ms(2);
 
 	/*
 	 * Hold the processor in reset before its memories are written: the ITCM
@@ -500,6 +485,11 @@ void test_touch(void)
 		con_hex2("fw", "segs", n, "data", off);
 		data = off;
 		for (i = 0; i < n; i++) {
+			char nm[8] = "seg0";
+
+			/* One checkpoint per segment: a hang says which one. */
+			nm[3] = (char)(0x30 + i);
+			ckpt(nm);
 			con_hex2("seg", "size", sizes[i], "dest", dests[i]);
 			if (dests[i] < 0x4000u) {
 				for (k = 0; k < sizes[i]; k += 4) {
