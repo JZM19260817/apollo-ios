@@ -2668,6 +2668,69 @@ ARM layout.
 Reading an address below 0x80000000 hangs the phone. Probes that touch raw physical
 addresses must check the address against the RAM base first; the checkpoint makes the
 crash recoverable but costs a full boot cycle.
+## 2026-11-25 01:00 - GPU: the vendor's SMMU register map, and why 0xa8000 hangs
+
+### The vendor's register table (kgsl_iommu.c)
+
+```c
+const unsigned int kgsl_iommu_reg_list[KGSL_IOMMU_REG_MAX] = {
+	0x0,   /* SCTLR */
+	0x20,  /* TTBR0 */
+	0x34,  /* CONTEXTIDR */
+	0x58,  /* FSR */
+	0x60,  /* FAR_0 */
+	0x618, /* TLBIALL */
+	0x008, /* RESUME */
+	0x68,  /* FSYNR0 */
+	0x6C,  /* FSYNR1 */
+	0x7F0, /* TLBSYNC */
+	0x7F4, /* TLBSTATUS */
+};
+```
+
+So the offsets used in the earlier probe (SCTLR 0x0, TTBR0 0x20) are right, and the
+values read there are real:
+
+```
+SCTLR  = 0x002f0406     bit 0 (SMMU_ENABLE) is CLEAR
+GBPA   = 0x00000000
+TTBR0  = 0x4c017e06
+TTBR1  = 0x20000005
+```
+
+With translation globally off, TTBR0 is not a live table - and its value points below
+0x80000000, which is not RAM on this phone, so walking it hung.
+
+### Why 0xa8000 hangs
+
+The context-bank registers are `ctx->regbase + offset`, and the device tree gives the
+user context bank `qcom,gpu-offset = <0xa8000>`. But the SMMU's declared MMIO window is
+only 64 KB:
+
+```dts
+reg = <0x3da0000 0x10000>;
+```
+
+`0x3da0000 + 0xa8000 = 0x3e22000` is outside that window, so reading it hits unmapped
+interconnect and hangs the phone. It is not the "protected range" that was suspected
+earlier - the address is simply past the end of the block the device tree describes.
+
+Two ways the vendor can still use it, and one of them is the answer to check next:
+
+1. That node's `reg` is the *SMMU control* block, and the context banks live in a
+   separate MMIO region that the vendor's own driver maps (search kgsl_iommu.c for the
+   second `devm_ioremap` / `of_iomap`).
+2. Or the "protect" range is carved out of a larger mapping the vendor makes.
+
+Either way, the next step is to read how `ctx->regbase` is computed - that one line
+says where the context banks really are.
+
+### One useful thing already settled
+
+SCTLR bit 0 clear means the SMMU is **not translating** in the state the shim inherits,
+so the firmware's addresses (0x4000, 0x144000, 0x60000000) are currently passed through
+as physical addresses - which is exactly why the TCM writes work and the memory-region
+writes would not.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
