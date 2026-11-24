@@ -442,21 +442,53 @@ void test_touch(void)
 		load_pdc_ucode(cx, mx, xo, ok);
 	}
 
-	/* Is the GPU SMMU bypassed, unprogrammed, or already in use? */
+	/*
+	 * The bootloader left a stage-1 table in TTBR0 = 0x4c017e06, so 0x4c017000.
+	 * Walking it is plain memory access: for each address the firmware asks for,
+	 * print the descriptor at every level and the physical page it resolves to.
+	 */
 	{
-		static const uint32_t smmu[8] = {0x0000u, 0x0004u, 0x0020u, 0x0024u,
-		    0x2000u, 0x2004u, 0x2030u, 0x2060u};
-		static const char snames[8][8] = {"s0000", "s0004", "s0020", "s0024",
-		    "cb0000", "cb0004", "cb0030", "cb0060"};
+		static const uint64_t va[4] = {0x00004000ull, 0x00144000ull,
+		    0x10004000ull, 0x60000000ull};
+		static const char vnames[4][8] = {"va04000", "va14400",
+		    "va10004", "va60000"};
 		unsigned i;
 
-		for (i = 0; i < 8; i++) {
-			ckpt(snames[i]);
-			con_hex2("smmu", "off", smmu[i], "val",
-			    *(volatile uint32_t *)(0x3da0000ul + smmu[i]));
+		for (i = 0; i < 4; i++) {
+			uint64_t t = 0x4c017000ull;
+			unsigned level;
+			unsigned mapped = 0;
+
+			ckpt(vnames[i]);
+			for (level = 0; level < 4; level++) {
+				unsigned shift = (unsigned)(39 - 9 * level);
+				unsigned idx;
+				uint64_t d;
+
+				if (!t) {
+					break;
+				}
+				idx = (unsigned)((va[i] >> shift) & 0x1ffu);
+				d = *(volatile uint64_t *)(t + idx * 8u);
+				con_hex("  desc", d);
+				if ((d & 3u) == 3u) {
+					/* table descriptor: descend */
+					t = d & 0x0000fffffffff000ull;
+					continue;
+				}
+				if ((d & 3u) == 1u) {
+					/* block: 1 GB (L1) or 2 MB (L2) */
+					con_hex("  block", (d & 0x0000fffffffe0000ull) |
+					    (va[i] & ((1ull << shift) - 1)));
+					mapped = 1;
+				}
+				break;
+			}
+			con_hex("  mapped", (uint64_t)mapped);
 		}
 	}
 
+	ckpt("gmu-read");
 	ckpt("gmu-read");
 	/* GMU registers are word-indexed: offset = 4 * index (see HakiOS's GMU_WORD). */
 	con_hex2("gmu", "cfg", rd(GMU, GMU_CM3_CFG), "init",

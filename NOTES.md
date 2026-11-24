@@ -2633,6 +2633,41 @@ That walk is pure reads of memory, no register access, so it cannot hang the bus
 If the existing table does not cover what is needed, use a free context bank with a
 table of our own: the shim can place a 4-level table in its own memory, point a
 context bank at it, and map only the ~25 pages the segments touch.
+## 2026-11-25 00:45 - GPU: TTBR0's value is not a usable table address
+
+### The walk hung on its first read
+
+The page-table walker stopped at `va04000` - the very first thing it did was read the
+descriptor at `0x4c017000`, and that read hung the bus.
+
+The shim's own MMU maps the first 8 GB as device memory (see `shim/mmu.c`), so this
+is not a missing mapping on our side: **`0x4c017000` is not backed by memory**. RAM on
+this phone starts at `0x80000000`, so anything below that is an address hole.
+
+### So the register value needs re-reading
+
+`SCTLR = 0x002f0406` has **bit 0 clear**, and bit 0 is SMMU_ENABLE. With translation
+globally off, the value at offset 0x20 cannot be a live page table base for us to walk.
+
+Two possibilities:
+
+1. The kgsl SMMU's register map differs from a stock MMU-500, so 0x20 is not TTBR0 and
+   0x0 is not SCTLR. The vendor's `kgsl_iommu.c` in the sm8250 tree has the definitive
+   offsets (`KGSL_IOMMU_...`), and that is the file to read next.
+2. The values are leftovers from the bootloader for a context bank that was never
+   enabled, in which case the SMMU is effectively inactive for our purposes and the
+   plan is simply to program a context bank of our own with a table in RAM above
+   0x80000000.
+
+Either way the next step is the same: **read the vendor's `kgsl_iommu.c`** and take its
+register offsets and the context-bank base from there rather than from the generic
+ARM layout.
+
+### Practical note for future probes
+
+Reading an address below 0x80000000 hangs the phone. Probes that touch raw physical
+addresses must check the address against the RAM base first; the checkpoint makes the
+crash recoverable but costs a full boot cycle.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
