@@ -460,20 +460,34 @@ void test_touch(void)
 	}
 
 	/*
-	 * Global registers, including the two the vendor's probe writes (0x6800 and
-	 * 0x64a0). Values go through ckval() so they survive a crash.
+	 * Map the SMMU block: for each 64-byte chunk of the first 4 KB, count how many
+	 * registers read as a stable non-zero value. Chunks that answer are real
+	 * registers; chunks that read zero everywhere are unimplemented.
 	 */
+	con_str("GPU", "smmu chunk scan");
 	{
-		/* 0x64a0 and above hang, so only the part that answers is read. */
-		static const uint32_t greg[6] = {0x0000u, 0x0004u, 0x0008u, 0x000cu,
-		    0x0020u, 0x0618u};
-		static const char gnames[6][10] = {"g0000", "g0004", "g0008",
-		    "g000c", "g0020", "g0618"};
-		unsigned i;
+		unsigned chunk;
 
-		for (i = 0; i < 6; i++) {
-			ckval(gnames[i],
-			    *(volatile uint32_t *)(0x3da0000ul + greg[i]));
+		for (chunk = 0; chunk < 64; chunk++) {
+			unsigned off, nz = 0;
+			char name[10] = "sm00";
+
+			for (off = 0; off < 0x40; off += 4) {
+				uint32_t a = *(volatile uint32_t *)
+				    (0x3da0000ul + chunk * 0x40 + off);
+				uint32_t b = *(volatile uint32_t *)
+				    (0x3da0000ul + chunk * 0x40 + off);
+
+				if (a != 0 && a == b) {
+					nz++;
+				}
+			}
+			if (nz == 0) {
+				continue;
+			}
+			name[2] = "0123456789abcdef"[chunk >> 4];
+			name[3] = "0123456789abcdef"[chunk & 0xf];
+			ckval(name, nz);
 		}
 	}
 
