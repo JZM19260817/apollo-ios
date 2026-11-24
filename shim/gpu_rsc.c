@@ -31,6 +31,21 @@ fw32(unsigned off)
 static char ck_buf[512];
 static unsigned ck_len;
 
+/* Append a value to the checkpoint buffer so a crash still leaves the number. */
+static void
+ckval(const char *name, uint64_t v)
+{
+	char hex[19];
+	unsigned i;
+
+	for (i = 0; i < 16; i++) {
+		hex[15 - i] = "0123456789abcdef"[(v >> (4 * i)) & 0xfu];
+	}
+	hex[16] = 0;
+	ckpt(name);
+	ckpt(hex);
+}
+
 static void ckpt(const char *s)
 {
 	unsigned i = 0;
@@ -443,48 +458,20 @@ void test_touch(void)
 	}
 
 	/*
-	 * The bootloader left a stage-1 table in TTBR0 = 0x4c017e06, so 0x4c017000.
-	 * Walking it is plain memory access: for each address the firmware asks for,
-	 * print the descriptor at every level and the physical page it resolves to.
+	 * Context banks live at SMMU base + 0x8000 + n * 0x1000 (kgsl_iommu.h), so CB0
+	 * is 0x3da8000 - inside the 64 KB window the device tree declares.
 	 */
 	{
-		static const uint64_t va[4] = {0x00004000ull, 0x00144000ull,
-		    0x10004000ull, 0x60000000ull};
-		static const char vnames[4][8] = {"va04000", "va14400",
-		    "va10004", "va60000"};
+		static const uint32_t cbreg[8] = {0x8000u, 0x8004u, 0x8020u, 0x8024u,
+		    0x8030u, 0x8034u, 0x8058u, 0x9000u};
+		static const char cbnames[8][12] = {"cb0sctl", "cb0x004",
+		    "cb0ttbr", "cb0x024", "cb0tcr", "cb0cidr", "cb0fsr",
+		    "cb1sctl"};
 		unsigned i;
 
-		for (i = 0; i < 4; i++) {
-			uint64_t t = 0x4c017000ull;
-			unsigned level;
-			unsigned mapped = 0;
-
-			ckpt(vnames[i]);
-			for (level = 0; level < 4; level++) {
-				unsigned shift = (unsigned)(39 - 9 * level);
-				unsigned idx;
-				uint64_t d;
-
-				if (!t) {
-					break;
-				}
-				idx = (unsigned)((va[i] >> shift) & 0x1ffu);
-				d = *(volatile uint64_t *)(t + idx * 8u);
-				con_hex("  desc", d);
-				if ((d & 3u) == 3u) {
-					/* table descriptor: descend */
-					t = d & 0x0000fffffffff000ull;
-					continue;
-				}
-				if ((d & 3u) == 1u) {
-					/* block: 1 GB (L1) or 2 MB (L2) */
-					con_hex("  block", (d & 0x0000fffffffe0000ull) |
-					    (va[i] & ((1ull << shift) - 1)));
-					mapped = 1;
-				}
-				break;
-			}
-			con_hex("  mapped", (uint64_t)mapped);
+		for (i = 0; i < 8; i++) {
+			ckval(cbnames[i],
+			    *(volatile uint32_t *)(0x3da0000ul + cbreg[i]));
 		}
 	}
 

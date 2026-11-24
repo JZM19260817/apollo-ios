@@ -2731,6 +2731,57 @@ SCTLR bit 0 clear means the SMMU is **not translating** in the state the shim in
 so the firmware's addresses (0x4000, 0x144000, 0x60000000) are currently passed through
 as physical addresses - which is exactly why the TCM writes work and the memory-region
 writes would not.
+## 2026-11-25 01:10 - GPU: the context-bank reads return implausible values
+
+### The values, captured in the cache partition
+
+Values now go through `ckval()`, which appends them to the checkpoint buffer, so they
+survive a crash:
+
+```
+0x3da8000  CB0 + 0x00  0x1e4de306
+0x3da8004  CB0 + 0x04  0x00000003
+0x3da8020  CB0 + 0x20  0xfe8b5950
+0x3da8024  CB0 + 0x24  0x9b7c77a0
+0x3da8030  CB0 + 0x30  0x303c7767
+0x3da8034  CB0 + 0x34  0x5e07e727
+0x3da8058  CB0 + 0x58  0x00000000
+0x3da9000  CB1 + 0x00  0x11eb2100
+```
+
+They are stable within a run but **do not look like register contents**:
+
+- `TTBR0 = 0xfe8b5950` is not 4 KB aligned, and a TTBR's low bits are attributes, not
+  an address pattern like 0x950;
+- `SCTLR = 0x1e4de306` sets many reserved bits;
+- `TCR = 0x303c7767` does not match TCR's defined fields.
+
+Meanwhile the global registers at 0x0 read plausibly (`SCTLR = 0x002f0406`,
+`TTBR0 = 0x4c017e06`), so the block itself is there and 0x0 is real.
+
+### Two readings
+
+1. `0x8000` is not where the context banks live. The vendor's macro says
+   `CB0_OFFSET = 0x8000` and `CB_SHIFT = 12`, but that table is indexed by
+   `KGSL_IOMMU_CTX_*` on top of `kgsl_iommu_reg_list`, and the CB register list may
+   itself be a different array - worth checking which array
+   `KGSL_IOMMU_GET_CTX_REG` indexes and whether the offsets differ per register.
+2. The context banks do not answer until the SMMU is taken out of reset or given its
+   clocks by the vendor's probe sequence (`kgsl_iommu_probe`), in which case the reads
+   return whatever the bus holds.
+
+### Next
+
+Read `kgsl_iommu_probe` in the vendor source in full: it shows the reset, the clock
+enables, the table pointer setup and - most importantly - the exact register array the
+context-bank macros use. That settles both questions at once, without another flash
+cycle.
+
+### Also visible in this run
+
+The firmware load still skips segments 3-7 (they need the IOMMU mappings) and
+`FW_INIT_RESULT` stays 0, which is consistent: the CM3 needs those blocks before it
+will run.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
