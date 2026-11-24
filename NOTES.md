@@ -2460,6 +2460,80 @@ block), copy segments 3 and 4 into it, fill the GMU's region descriptors the way
 The half that is already done is the harder half: **the CM3 accepts firmware into its
 ITCM from this shim**, which means the GMU can be brought up without the vendor's
 driver.
+## 2026-11-25 00:10 - GPU: what the firmware's 8 segments want, and the plan for the GMU's IOMMU
+
+### The full segment table (the earlier runs only saw six)
+
+```
+seg0  0x0200   dest 0x0000200    ITCM, written
+seg1  0x0200   dest 0x0000400    ITCM, written
+seg2  0x3c00   dest 0x0004000    ITCM, written (0x4000 + 0x3c00 = 0x7c00, past the 16 KB window - see below)
+seg3  0x8000   dest 0x10004000   memory region
+seg4  0x3fe0   dest 0x10007fdc   memory region
+seg5  0x0024   dest 0x00144000   memory region
+seg6  0x13000  dest 0x00157000   memory region
+seg7  0x9000   dest 0x60000000   memory region
+fw end 0x2c08c
+```
+
+`cm3 init` stays 0 with only the ITCM part loaded, so the memory-region blocks are
+required.
+
+### What mainline allocates for an a650 family GMU
+
+```c
+dummy  : SZ_4K        @ IOVA 0x60000000
+icache : SZ_16M-SZ_16K @ IOVA 0x00004000
+log    : SZ_16K       @ dynamic
+HFI queues, etc.
+```
+
+Mapping the segments onto that:
+
+| seg | dest | region |
+| --- | --- | --- |
+| 2 | 0x4000 | icache (its base is exactly 0x4000) |
+| 5 | 0x144000 | icache |
+| 6 | 0x157000 | icache |
+| 3 | 0x10004000 | outside icache |
+| 4 | 0x10007fdc | outside icache |
+| 7 | 0x60000000 | the uncached range |
+
+So this vendor image does not fit mainline's simple map exactly, and seg3/seg4 do
+not fall inside any of mainline's regions.
+
+### The freedom that makes this tractable
+
+**The page tables are ours.** An IOVA only means what we map it to, so we can give
+the firmware any address it asks for:
+
+- map the pages seg2, seg5 and seg6 touch inside the icache range;
+- map seg3 and seg4's IOVAs (0x10004000, 0x10007fdc) to a buffer of our own;
+- map 0x60000000 to the same;
+
+and only the pages actually used need backing: about 25 pages, roughly 100 KB, not
+the 16 MB mainline reserves.
+
+### Plan
+
+1. **Adreno SMMU stage-1 page tables.** The GPU's SMMU is at `0x3da0000` on this SoC
+   (the "smmu" region of the kgsl-3d0 node). Program its global registers (SCTLR,
+   TTBR0, CBAR), one context bank (CBAR, SCTLR, TTBR0, TCR, MAIR, ASID) and a
+   four-level, 4 KB-granule page table in memory the shim owns.
+2. **Buffers and copies.** One aligned block for the icache-backed segments, one for
+   seg3/seg4, one for seg7, copied from the firmware image.
+3. **Then the same start sequence**, and read `FW_INIT_RESULT` for `0xbabeface`.
+
+This is a self-contained piece: page tables plus one SMMU instance, no other
+subsystem involved.
+
+### Note on seg2
+
+seg2 is dest 0x4000, size 0x3c00 - it starts exactly at the icache base, not inside
+ITCM (which ends at 0x4000). Whether the CM3 expects it in ITCM or in the icache
+mapping is something the next run can test both ways: it was accepted into the ITCM
+window without hanging, which only proves the window takes writes, not that the
+address was right.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
