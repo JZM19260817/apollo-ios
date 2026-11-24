@@ -2534,6 +2534,62 @@ ITCM (which ends at 0x4000). Whether the CM3 expects it in ITCM or in the icache
 mapping is something the next run can test both ways: it was accepted into the ITCM
 window without hanging, which only proves the window takes writes, not that the
 address was right.
+## 2026-11-25 00:25 - GPU: the GMU's IOMMU is the kgsl SMMU at 0x3da0000
+
+### What the device tree says
+
+The GPU does **not** go through the apps_smmu (0x15000000, `qcom,qsmmuv500`). It has its
+own SMMU, and the node names it exactly:
+
+```dts
+qcom,kgsl-iommu@3da0000 {
+	compatible = "qcom,kgsl-smmu-v2";
+	reg = <0x3da0000 0x10000>;
+	qcom,protect = <0xa0000 0xc000>;
+	clocks = <gcc_gpu_memnoc_gfx, gcc_gpu_snoc_dvm_gfx, gpu_cc_ahb>;
+	clock-names = "gcc_gpu_memnoc_gfx", "gcc_gpu_snoc_dvm_gfx", "gpu_cc_ahb";
+	qcom,secure_align_mask = <0xfff>;
+
+	gfx3d_user {
+		compatible = "qcom,smmu-kgsl-cb";
+		iommus = <0x183 0x00 0x401>;      /* sid 0, mask 0x401 */
+		qcom,iommu-dma = "disabled";
+		qcom,gpu-offset = <0xa8000>;      /* context bank offset */
+	};
+
+	gfx3d_secure {
+		iommus = <0x183 0x02 0x400>;
+	};
+};
+```
+
+Two useful facts:
+
+1. **The three clocks it needs are the ones the GPUCC power-up already enables** -
+   `gcc_gpu_memnoc_gfx`, `gcc_gpu_snoc_dvm_gfx` and `gpu_cc_ahb`, all in the GCC
+   block the shim already touches.
+2. It is an **SMMUv2 / MMU-500** ("kgsl-smmu-v2"), so the register layout is the
+   standard one: GR0 at the base, context banks after it, with the user context bank
+   at offset 0xa8000 according to the node.
+
+### What that means for the firmware blocks
+
+Once a context bank is programmed with a stage-1 table, any IOVA can be pointed at any
+physical page - so the blocks that want 0x10004000, 0x144000, 0x157000 and 0x60000000
+can all be satisfied from buffers the shim owns. Only the pages the segments
+actually touch need backing (about 25 pages).
+
+### Next concrete steps
+
+1. Confirm the SMMU is unprogrammed after a shim boot (read SCTLR/GBPA at 0x3da0000 -
+   a read-only probe, like the GMU window map).
+2. Program the user context bank: SCTLR, TTBR0, TCR, MAIR, ASID, CBAR.
+3. Build a 4-level, 4 KB-granule stage-1 table covering the four IOVA ranges the
+   firmware needs.
+4. Copy the segments, keep the ITCM load, start the CM3, read FW_INIT_RESULT.
+
+Step 1 is the one to do first: it costs one power cycle and says whether the previous
+boot stage left the SMMU in bypass or in some state that has to be undone.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
