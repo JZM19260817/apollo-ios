@@ -2782,6 +2782,99 @@ cycle.
 The firmware load still skips segments 3-7 (they need the IOMMU mappings) and
 `FW_INIT_RESULT` stays 0, which is consistent: the CM3 needs those blocks before it
 will run.
+## 2026-11-25 01:00 - Session summary: the GMU's memory blocks, the SMMU, and a build trap
+
+### Where the session started
+
+The GMU firmware load hung on its ITCM writes. Where it ended: the ITCM writes are
+understood, the SMMU is located and partly read, and **three build and code bugs were
+found that had been producing misleading results for several runs**.
+
+### What was learned, in order
+
+1. **The full segment table** (the earlier runs saw six of eight):
+
+   ```
+   seg0 0x0200 @ 0x00000200   ITCM
+   seg1 0x0200 @ 0x00000400   ITCM
+   seg2 0x3c00 @ 0x00004000   ends past ITCM, so skipped
+   seg3 0x8000 @ 0x10004000   memory region
+   seg4 0x3fe0 @ 0x10007fdc   memory region
+   seg5 0x0024 @ 0x00144000   memory region
+   seg6 0x13000 @ 0x00157000  memory region
+   seg7 0x9000 @ 0x60000000   memory region (mainline's uncached base)
+   ```
+
+   With only the TCM part loaded, `FW_INIT_RESULT` stays 0 - the memory-region blocks
+   are required.
+
+2. **Writes into the 0x1000-0x13fff "hole" work even though reads hang.** A single word
+   written to 0x3000 and 0x7000 completed without hanging, which makes the TCM windows
+   usable with the core held in reset.
+
+3. **The GPU SMMU is `qcom,kgsl-smmu-v2` at 0x3da0000**, not the apps_smmu. Its three
+   clocks are already enabled by the GPUCC power-up.
+
+4. **Its global registers**, read on the phone:
+
+   ```
+   0x0000 SCTLR  = 0x002f0406    bit 0 (enable) clear -> not translating
+   0x0004 GBPA   = 0x00000000
+   0x0020 TTBR0  = 0x4c017e06    a table base below RAM
+   0x0618        = 0x00000000
+   0x64a0        -> HANGS
+   ```
+
+   Because translation is off, the firmware's addresses currently pass through as
+   physical addresses - which is exactly why the TCM writes work and why the
+   memory-region blocks cannot.
+
+5. **TTBR0 is not usable**: 0x4c017000 is below the RAM base (0x80000000), so walking it
+   hangs. The value is a leftover from the bootloader, not a live table for us.
+
+6. **The context banks at base + 0x8000 read implausible values** (TTBR0 not 4 KB
+   aligned, SCTLR setting reserved bits, TCR not matching its fields), while 0x64a0
+   hangs. The window only answers from 0x0 to about 0x1000, so that region is very
+   likely an alias of something else. **The earlier CB conclusions should be treated as
+   unverified.**
+
+### Three bugs that had been poisoning the results
+
+1. **Stale images.** `gpu_rsc.c` failed to compile (`static declaration of 'ckpt'
+   follows non-static declaration`, because `ckval` called `ckpt` before its
+   definition), and the build script still linked the old object files - so several
+   "the new probe does nothing" runs were actually the old binary. Fixed with a forward
+   declaration, and every image is now verified with `strings | grep` for a string only
+   the new build contains.
+2. **`db_find` was never wired in.** The PDC still called `rpmh_find()`, which only
+   accepts VRM resources, so `cx.lvl`/`mx.lvl`/`xo.lvl` always came back zero and the
+   PDC was programmed with zero addresses every run.
+3. **Probes read addresses that hang** (0x64a0, 0x6800), so the run never reached the
+   GMU part.
+
+All three are fixed in `work/boot/shim-fix1.img` (built 00:52, verified to contain the
+new strings).
+
+### Hardware facts worth keeping
+
+- Reading a physical address below 0x80000000 hangs the phone (no memory there).
+- `usbipd` reporting the phone as `0000:0002` (descriptor request failed) means the USB
+  link is broken: `fastboot flash` then hangs or writes nothing while still printing
+  "OKAY". Always check the device ID before trusting a flash result.
+- The GMU's CM3 registers are word-indexed (`GMU_WORD(n) = 4n`): CM3 0x14000,
+  BOOT_CONFIG 0x14004, FW_INIT 0x14070, CM3_CFG 0x140b4, ITCM 0x3000, DTCM 0x7000.
+
+### Next session
+
+1. Flash `shim-fix1` and confirm the PDC now gets real `cx.lvl`/`mx.lvl`/`xo.lvl`
+   addresses (they should print as 0x30000 and 0x30010), which may change the GMU's
+   behaviour on its own.
+2. Settle the SMMU: its visible window is tiny, so the context bank is elsewhere - the
+   vendor's `kgsl_iommu_probe` maps `regstart`/`regsize` straight from the device tree
+   and then adds 0x8000, so check whether the DT node needs a larger `reg` or whether a
+   second mapping exists.
+3. Then the memory regions: with the SMMU programmable, map the four IOVA ranges the
+   blocks want onto buffers the shim owns (about 25 pages) and start the CM3.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

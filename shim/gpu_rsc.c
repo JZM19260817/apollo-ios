@@ -31,6 +31,8 @@ fw32(unsigned off)
 static char ck_buf[512];
 static unsigned ck_len;
 
+static void ckpt(const char *s);
+
 /* Append a value to the checkpoint buffer so a crash still leaves the number. */
 static void
 ckval(const char *name, uint64_t v)
@@ -449,8 +451,8 @@ void test_touch(void)
 	ckpt("pdc-load");
 	{
 		uint32_t cx = 0, mx = 0, xo = 0;
-		int ok = !rpmh_find("cx.lvl", &cx) && !rpmh_find("mx.lvl", &mx) &&
-		    !rpmh_find("xo.lvl", &xo);
+		int ok = !db_find("cx.lvl", &cx) && !db_find("mx.lvl", &mx) &&
+		    !db_find("xo.lvl", &xo);
 
 		con_hex2("rpmh", "cx", cx, "mx", mx);
 		con_hex("rpmh xo", xo);
@@ -458,24 +460,23 @@ void test_touch(void)
 	}
 
 	/*
-	 * Context banks live at SMMU base + 0x8000 + n * 0x1000 (kgsl_iommu.h), so CB0
-	 * is 0x3da8000 - inside the 64 KB window the device tree declares.
+	 * Global registers, including the two the vendor's probe writes (0x6800 and
+	 * 0x64a0). Values go through ckval() so they survive a crash.
 	 */
 	{
-		static const uint32_t cbreg[8] = {0x8000u, 0x8004u, 0x8020u, 0x8024u,
-		    0x8030u, 0x8034u, 0x8058u, 0x9000u};
-		static const char cbnames[8][12] = {"cb0sctl", "cb0x004",
-		    "cb0ttbr", "cb0x024", "cb0tcr", "cb0cidr", "cb0fsr",
-		    "cb1sctl"};
+		/* 0x64a0 and above hang, so only the part that answers is read. */
+		static const uint32_t greg[6] = {0x0000u, 0x0004u, 0x0008u, 0x000cu,
+		    0x0020u, 0x0618u};
+		static const char gnames[6][10] = {"g0000", "g0004", "g0008",
+		    "g000c", "g0020", "g0618"};
 		unsigned i;
 
-		for (i = 0; i < 8; i++) {
-			ckval(cbnames[i],
-			    *(volatile uint32_t *)(0x3da0000ul + cbreg[i]));
+		for (i = 0; i < 6; i++) {
+			ckval(gnames[i],
+			    *(volatile uint32_t *)(0x3da0000ul + greg[i]));
 		}
 	}
 
-	ckpt("gmu-read");
 	ckpt("gmu-read");
 	/* GMU registers are word-indexed: offset = 4 * index (see HakiOS's GMU_WORD). */
 	con_hex2("gmu", "cfg", rd(GMU, GMU_CM3_CFG), "init",
@@ -485,14 +486,9 @@ void test_touch(void)
 	 * Writes to 0x3000 and 0x7000 complete even though reads there hang, so the
 	 * memory windows are usable with the core held in reset. Load the firmware.
 	 */
-	ckpt("cm3-reset");
-	wr(GMU, CM3_SYSRESET, 1u);
-	wait_ms(2);
-
 	/*
-	 * Hold the processor in reset before its memories are written: the ITCM
-	 * write hung with the core free-running, and a halted CM3 is what the
-	 * vendor's own loading sequence implies.
+	 * Hold the processor in reset before its memories are written: reads of the
+	 * memory windows hang while the core runs, and writes land once it is halted.
 	 */
 	ckpt("cm3-reset");
 	wr(GMU, CM3_SYSRESET, 1u);
