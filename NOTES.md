@@ -2875,6 +2875,65 @@ new strings).
    second mapping exists.
 3. Then the memory regions: with the SMMU programmable, map the four IOVA ranges the
    blocks want onto buffers the shim owns (about 25 pages) and start the CM3.
+## 2026-11-25 01:05 - Session summary, part two: the PDC fix works
+
+### The result that matters
+
+After fixing the three bugs, the PDC finally received real resource addresses. Every
+previous run printed zero:
+
+```
+before:  rpmh cx 00000000 mx 00000000      rpmh xo 0
+now:     rpmh cx 00030000 mx 00030010      rpmh xo 0x300A0
+```
+
+`cx.lvl = 0x30000`, `mx.lvl = 0x30010` and `xo.lvl = 0x300A0` are exactly the values the
+command DB holds, so `load_pdc_ucode()` is now programming the GPU's power-state
+sequences with the correct targets for the first time.
+
+Everything after that still behaves as expected: `CM3_CFG = 0x4052`,
+`FW_INIT_RESULT = 0` (five of eight segments still skipped), `RBBM` and the GPU counter
+still zero.
+
+### Review of the steps, as asked
+
+**Correct and verified on hardware:**
+
+- GMU register addressing: word indices, so CM3 0x14000, BOOT_CONFIG 0x14004,
+  FW_INIT 0x14070, CM3_CFG 0x140b4, ITCM 0x3000, DTCM 0x7000. `CM3_CFG` reading
+  0x4052 - the value mainline writes - is the proof.
+- The TCM windows accept writes while refusing reads; a single word at 0x3000 and
+  0x7000 went in without hanging.
+- Segment classification: seg0 (0x200 at 0x200) and seg1 (0x200 at 0x400) are the only
+  ITCM blocks. seg2 (0x3c00 at 0x4000) would run from 0x7000 to 0xabff, straight
+  through the DTCM window, so skipping it is right - it is a memory-region block, not
+  TCM.
+- The CM3 start sequence matches mainline: BOOT_CONFIG = 2, SYSRESET 1 then 0, then
+  poll FW_INIT_RESULT for 0xbabeface.
+
+**Still uncertain:**
+
+- The SMMU. `SCTLR` bit 0 is clear, so nothing is translating, and `TTBR0` holds a
+  bootloader leftover pointing below RAM. The context-bank reads at base + 0x8000 give
+  values that cannot be register contents (TTBR0 not 4 KB aligned, reserved bits set),
+  and 0x64a0 hangs, so that region is likely an alias rather than the real bank.
+- Because nothing translates, the firmware's memory-region addresses (0x60000000,
+  0x10004000, 0x144000, 0x157000) hit physical holes and cannot work - which is exactly
+  the remaining blocker for the CM3.
+
+### Dead code worth cleaning
+
+The DTCM branch in the loader never fires (no segment qualifies); it can go, or stay as
+a guard.
+
+### Next session
+
+1. Settle the SMMU context bank: read `kgsl_iommu_probe` around the mapping it does for
+   `regstart`/`regsize`, and check whether the device tree's `reg = <0x3da0000 0x10000>`
+   is the whole story or whether the vendor maps a second, larger region.
+2. With a context bank programmed and a stage-1 table in RAM (above 0x80000000), map the
+   four IOVA ranges the blocks want onto buffers of our own - about 25 pages.
+3. Then the CM3 has its full image and `FW_INIT_RESULT` becomes meaningful.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),
