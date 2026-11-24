@@ -2590,6 +2590,49 @@ actually touch need backing (about 25 pages).
 
 Step 1 is the one to do first: it costs one power cycle and says whether the previous
 boot stage left the SMMU in bypass or in some state that has to be undone.
+## 2026-11-25 00:35 - GPU: the SMMU is already programmed by the bootloader
+
+### The register values, read on the phone
+
+```
+0x3da0000 + 0x0000  SCTLR  = 0x002f0406
+0x3da0000 + 0x0004  GBPA   = 0x00000000
+0x3da0000 + 0x0020  TTBR0  = 0x4c017e06     -> page table at 0x4c017000
+0x3da0000 + 0x0024  TTBR1  = 0x20000005
+0x3da0000 + 0x2000  CB0+0  = 0
+0x3da0000 + 0x2004  CB0+4  = 0
+0x3da0000 + 0x2030  CB0+30 = 0
+0x3da0000 + 0x2060  CB0+60 = 0
+```
+
+Two conclusions:
+
+1. **The GPU SMMU is not a blank slate.** The bootloader programmed it - `TTBR0`
+   holds a real table base (0x4c017000) and `SCTLR` holds a full configuration. That
+   is the mapping the splash screen needs.
+2. **GBPA = 0 means it is not in bypass**, so DMA from the GPU/GMU does go through
+   translation already.
+
+The context bank at 0x2000 reads zero, so either the kgsl SMMU keeps its context
+banks at a different offset, or only the "secure" bank (the one inside the protected
+0xa0000-0xac000 range) is in use.
+
+### The useful next move: read the existing table
+
+`TTBR0 = 0x4c017e06` is a **physical address** the shim can read directly:
+0x4c017000, an ARM stage-1 table (4 KB granule, 4 levels, or 3 with a 1 GB block at
+the top). Walking it says exactly which IOVAs the bootloader mapped for the GPU - and
+the interesting possibility is that some of the addresses the GMU firmware wants
+(0x4000, 0x144000, 0x157000, 0x60000000) are already mapped, in which case the
+firmware blocks could go straight into those pages.
+
+That walk is pure reads of memory, no register access, so it cannot hang the bus.
+
+### Fallback
+
+If the existing table does not cover what is needed, use a free context bank with a
+table of our own: the shim can place a 4-level table in its own memory, point a
+context bank at it, and map only the ~25 pages the segments touch.
 ## apollo port handoff (2026-10-29)
 
 **Hardware:** Redmi K30S Ultra `M2007J3SC`, codename `apollo`, SM8250 (Snapdragon 865),

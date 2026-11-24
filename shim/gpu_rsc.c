@@ -442,6 +442,21 @@ void test_touch(void)
 		load_pdc_ucode(cx, mx, xo, ok);
 	}
 
+	/* Is the GPU SMMU bypassed, unprogrammed, or already in use? */
+	{
+		static const uint32_t smmu[8] = {0x0000u, 0x0004u, 0x0020u, 0x0024u,
+		    0x2000u, 0x2004u, 0x2030u, 0x2060u};
+		static const char snames[8][8] = {"s0000", "s0004", "s0020", "s0024",
+		    "cb0000", "cb0004", "cb0030", "cb0060"};
+		unsigned i;
+
+		for (i = 0; i < 8; i++) {
+			ckpt(snames[i]);
+			con_hex2("smmu", "off", smmu[i], "val",
+			    *(volatile uint32_t *)(0x3da0000ul + smmu[i]));
+		}
+	}
+
 	ckpt("gmu-read");
 	/* GMU registers are word-indexed: offset = 4 * index (see HakiOS's GMU_WORD). */
 	con_hex2("gmu", "cfg", rd(GMU, GMU_CM3_CFG), "init",
